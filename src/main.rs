@@ -1,10 +1,10 @@
 use std::sync::Arc;
 
 use axum::{
+    Json, Router,
     extract::{Path, Query, State},
     http::StatusCode,
     routing::{get, post},
-    Json, Router,
 };
 use clap::{Parser, Subcommand};
 use serde::Deserialize;
@@ -41,6 +41,7 @@ struct AppState {
     db: Arc<Database>,
     dlp: Arc<DlpEngine>,
     anomaly: Arc<AnomalyEngine>,
+    #[allow(dead_code)]
     config: Arc<Config>,
 }
 
@@ -109,7 +110,10 @@ fn create_router(state: AppState) -> Router {
 }
 
 async fn health() -> (StatusCode, Json<serde_json::Value>) {
-    (StatusCode::OK, Json(serde_json::json!({"status": "ok", "service": "sentiel"})))
+    (
+        StatusCode::OK,
+        Json(serde_json::json!({"status": "ok", "service": "sentiel"})),
+    )
 }
 
 async fn dashboard() -> (StatusCode, String) {
@@ -205,9 +209,18 @@ async fn stats(
     State(state): State<AppState>,
 ) -> Result<Json<serde_json::Value>, sentiel::errors::SentielError> {
     let events = state.db.list_events(100000)?;
-    let authz: Vec<_> = events.iter().filter(|e| e.source == "patroclus" && e.event_type == "authz_decision").collect();
-    let allows = authz.iter().filter(|e| e.data.get("decision").and_then(|v| v.as_str()) == Some("allow")).count();
-    let denies = authz.iter().filter(|e| e.data.get("decision").and_then(|v| v.as_str()) == Some("deny")).count();
+    let authz: Vec<_> = events
+        .iter()
+        .filter(|e| e.source == "patroclus" && e.event_type == "authz_decision")
+        .collect();
+    let allows = authz
+        .iter()
+        .filter(|e| e.data.get("decision").and_then(|v| v.as_str()) == Some("allow"))
+        .count();
+    let denies = authz
+        .iter()
+        .filter(|e| e.data.get("decision").and_then(|v| v.as_str()) == Some("deny"))
+        .count();
     let dlp_count = state.db.dlp_violations(10000)?.len();
     let alerts = state.db.alerts_unacknowledged()?;
 
@@ -271,7 +284,11 @@ async fn compliance_report(
         "gdpr" => ComplianceReporter::generate_gdpr(&state.db)?,
         "eu_ai_act" => ComplianceReporter::generate_eu_ai_act(&state.db)?,
         "hipaa" => ComplianceReporter::generate_hipaa(&state.db)?,
-        _ => return Err(sentiel::errors::SentielError::NotFound("unknown framework".to_string())),
+        _ => {
+            return Err(sentiel::errors::SentielError::NotFound(
+                "unknown framework".to_string(),
+            ));
+        }
     };
     Ok(Json(serde_json::to_value(&report).unwrap()))
 }

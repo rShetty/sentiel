@@ -38,8 +38,14 @@ impl ComplianceReporter {
             .filter(|e| e.source == "miser" && e.event_type == "llm_cost")
             .collect();
 
-        let allows = authz_events.iter().filter(|e| e.data.get("decision").and_then(|v| v.as_str()) == Some("allow")).count();
-        let denies = authz_events.iter().filter(|e| e.data.get("decision").and_then(|v| v.as_str()) == Some("deny")).count();
+        let allows = authz_events
+            .iter()
+            .filter(|e| e.data.get("decision").and_then(|v| v.as_str()) == Some("allow"))
+            .count();
+        let denies = authz_events
+            .iter()
+            .filter(|e| e.data.get("decision").and_then(|v| v.as_str()) == Some("deny"))
+            .count();
 
         Ok(ComplianceReport {
             framework: "SOC 2 Type II".to_string(),
@@ -94,11 +100,19 @@ impl ComplianceReporter {
     pub fn generate_gdpr(db: &Database) -> Result<ComplianceReport> {
         let all_events = db.list_events(10000)?;
         let dlp_events = db.dlp_violations(1000)?;
-        let personal_data_access = dlp_events.iter()
+        let personal_data_access = dlp_events
+            .iter()
             .filter(|e| {
-                e.dlp_violations.as_ref().map(|v| {
-                    v.iter().any(|v| v.pattern_name == "email" || v.pattern_name == "ssn" || v.pattern_name == "phone")
-                }).unwrap_or(false)
+                e.dlp_violations
+                    .as_ref()
+                    .map(|v| {
+                        v.iter().any(|v| {
+                            v.pattern_name == "email"
+                                || v.pattern_name == "ssn"
+                                || v.pattern_name == "phone"
+                        })
+                    })
+                    .unwrap_or(false)
             })
             .count();
 
@@ -149,7 +163,8 @@ impl ComplianceReporter {
             .iter()
             .filter(|e| e.source == "patroclus" && e.event_type == "authz_decision")
             .collect();
-        let approvals = authz_events.iter()
+        let approvals = authz_events
+            .iter()
             .filter(|e| e.data.get("decision").and_then(|v| v.as_str()) == Some("require_approval"))
             .count();
 
@@ -196,11 +211,16 @@ impl ComplianceReporter {
     pub fn generate_hipaa(db: &Database) -> Result<ComplianceReport> {
         let all_events = db.list_events(10000)?;
         let dlp_events = db.dlp_violations(1000)?;
-        let phi_patterns = dlp_events.iter()
+        let phi_patterns = dlp_events
+            .iter()
             .filter(|e| {
-                e.dlp_violations.as_ref().map(|v| {
-                    v.iter().any(|v| matches!(v.pattern_name.as_str(), "ssn" | "phone" | "email"))
-                }).unwrap_or(false)
+                e.dlp_violations
+                    .as_ref()
+                    .map(|v| {
+                        v.iter()
+                            .any(|v| matches!(v.pattern_name.as_str(), "ssn" | "phone" | "email"))
+                    })
+                    .unwrap_or(false)
             })
             .count();
 

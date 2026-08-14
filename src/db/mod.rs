@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use chrono::Utc;
-use rusqlite::{params, Connection};
+use rusqlite::{Connection, params};
 use uuid::Uuid;
 
 use crate::errors::{Result, SentielError};
@@ -95,9 +95,7 @@ impl Database {
             "SELECT id, source, session_id, agent_id, principal_id, event_type, severity, data, dlp_violations, anomaly_flags, timestamp
              FROM events ORDER BY timestamp DESC LIMIT ?",
         )?;
-        let rows = stmt.query_map(params![limit], |row| {
-            Self::row_to_event(row)
-        })?;
+        let rows = stmt.query_map(params![limit], Self::row_to_event)?;
         let mut result = Vec::new();
         for row in rows {
             result.push(row?);
@@ -121,25 +119,25 @@ impl Database {
         );
         let mut params_vec: Vec<String> = Vec::new();
 
-        if source.is_some() {
+        if let Some(v) = source {
             sql.push_str(" AND source = ?");
-            params_vec.push(source.unwrap().to_string());
+            params_vec.push(v.to_string());
         }
-        if session_id.is_some() {
+        if let Some(v) = session_id {
             sql.push_str(" AND session_id = ?");
-            params_vec.push(session_id.unwrap().to_string());
+            params_vec.push(v.to_string());
         }
-        if agent_id.is_some() {
+        if let Some(v) = agent_id {
             sql.push_str(" AND agent_id = ?");
-            params_vec.push(agent_id.unwrap().to_string());
+            params_vec.push(v.to_string());
         }
-        if event_type.is_some() {
+        if let Some(v) = event_type {
             sql.push_str(" AND event_type = ?");
-            params_vec.push(event_type.unwrap().to_string());
+            params_vec.push(v.to_string());
         }
-        if severity.is_some() {
+        if let Some(v) = severity {
             sql.push_str(" AND severity = ?");
-            params_vec.push(severity.unwrap().to_string());
+            params_vec.push(v.to_string());
         }
         sql.push_str(" ORDER BY timestamp DESC LIMIT ?");
 
@@ -150,9 +148,7 @@ impl Database {
             .chain(std::iter::once(&limit as &dyn rusqlite::ToSql))
             .collect();
 
-        let rows = stmt.query_map(param_refs.as_slice(), |row| {
-            Self::row_to_event(row)
-        })?;
+        let rows = stmt.query_map(param_refs.as_slice(), Self::row_to_event)?;
         let mut result = Vec::new();
         for row in rows {
             result.push(row?);
@@ -179,9 +175,7 @@ impl Database {
              FROM events WHERE dlp_violations IS NOT NULL AND dlp_violations != 'null' AND dlp_violations != '[]'
              ORDER BY timestamp DESC LIMIT ?",
         )?;
-        let rows = stmt.query_map(params![limit], |row| {
-            Self::row_to_event(row)
-        })?;
+        let rows = stmt.query_map(params![limit], Self::row_to_event)?;
         let mut result = Vec::new();
         for row in rows {
             result.push(row?);
@@ -212,7 +206,9 @@ impl Database {
                 created_at: chrono::DateTime::parse_from_rfc3339(&row.get::<_, String>(8)?)
                     .map(|d| d.with_timezone(&Utc))
                     .unwrap_or(Utc::now()),
-                acknowledged_at: acked_at.and_then(|s| chrono::DateTime::parse_from_rfc3339(&s).ok()).map(|d| d.with_timezone(&Utc)),
+                acknowledged_at: acked_at
+                    .and_then(|s| chrono::DateTime::parse_from_rfc3339(&s).ok())
+                    .map(|d| d.with_timezone(&Utc)),
             })
         })?;
         let mut result = Vec::new();
@@ -314,10 +310,13 @@ impl Database {
             principal_id: row.get(4)?,
             event_type: row.get(5)?,
             severity: row.get(6)?,
-            data: serde_json::from_str(&row.get::<_, String>(7)?).unwrap_or(serde_json::Value::Null),
+            data: serde_json::from_str(&row.get::<_, String>(7)?)
+                .unwrap_or(serde_json::Value::Null),
             dlp_violations: dlp_str.and_then(|s| serde_json::from_str(&s).ok()),
             anomaly_flags: anomaly_str.and_then(|s| serde_json::from_str(&s).ok()),
-            timestamp: chrono::DateTime::parse_from_rfc3339(&ts_str).ok().map(|d| d.with_timezone(&Utc)),
+            timestamp: chrono::DateTime::parse_from_rfc3339(&ts_str)
+                .ok()
+                .map(|d| d.with_timezone(&Utc)),
         })
     }
 }

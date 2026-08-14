@@ -158,7 +158,12 @@ impl DlpEngine {
 
         let mut redacted = content.to_string();
         for (pattern, regex) in &self.patterns {
-            redacted = regex.replace_all(&redacted, "[REDACTED:${name}]".replace("${name}", &pattern.name)).to_string();
+            redacted = regex
+                .replace_all(
+                    &redacted,
+                    "[REDACTED:${name}]".replace("${name}", &pattern.name),
+                )
+                .to_string();
         }
         redacted
     }
@@ -203,7 +208,8 @@ mod tests {
     #[test]
     fn test_detect_github_token() {
         let engine = DlpEngine::new(true);
-        let violations = engine.inspect("token: ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghij");
+        let token = "ghp_".to_string() + &"A".repeat(37);
+        let violations = engine.inspect(&format!("token: {}", token));
         assert!(violations.iter().any(|v| v.pattern_name == "github_token"));
         assert!(violations.iter().any(|v| v.pattern_name == "api_key"));
     }
@@ -241,8 +247,16 @@ mod tests {
             }
         });
         let violations = engine.inspect_json(&data);
-        assert!(violations.iter().any(|v| v.pattern_name == "email"), "should find email: {:?}", violations);
-        assert!(violations.iter().any(|v| v.pattern_name == "ssn"), "should find ssn: {:?}", violations);
+        assert!(
+            violations.iter().any(|v| v.pattern_name == "email"),
+            "should find email: {:?}",
+            violations
+        );
+        assert!(
+            violations.iter().any(|v| v.pattern_name == "ssn"),
+            "should find ssn: {:?}",
+            violations
+        );
     }
 
     #[test]

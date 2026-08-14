@@ -3,7 +3,6 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::config::AnomalyConfig;
-use crate::db::Database;
 use crate::events::AgentEvent;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -60,7 +59,11 @@ impl AnomalyEngine {
             return None;
         }
 
-        let current_cost = event.data.get("cost").and_then(|v| v.as_f64()).unwrap_or(0.0);
+        let current_cost = event
+            .data
+            .get("cost")
+            .and_then(|v| v.as_f64())
+            .unwrap_or(0.0);
         let recent_cost: f64 = recent
             .iter()
             .filter(|e| e.event_type == "llm_cost")
@@ -115,9 +118,7 @@ impl AnomalyEngine {
 
         let denials = authz_events
             .iter()
-            .filter(|e| {
-                e.data.get("decision").and_then(|v| v.as_str()) == Some("deny")
-            })
+            .filter(|e| e.data.get("decision").and_then(|v| v.as_str()) == Some("deny"))
             .count();
 
         let rate = denials as f64 / authz_events.len() as f64;
@@ -190,7 +191,11 @@ impl AnomalyEngine {
             return None;
         }
 
-        let tool = event.data.get("tool").and_then(|v| v.as_str()).unwrap_or("");
+        let tool = event
+            .data
+            .get("tool")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
         if !tool.contains("export") && !tool.contains("download") && !tool.contains("list") {
             return None;
         }
@@ -226,7 +231,10 @@ impl AnomalyEngine {
 
     fn check_dlp_escalation(&self, event: &AgentEvent) -> Option<Alert> {
         let violations = event.dlp_violations.as_ref()?;
-        let critical_count = violations.iter().filter(|v| v.severity == "critical").count();
+        let critical_count = violations
+            .iter()
+            .filter(|v| v.severity == "critical")
+            .count();
 
         if critical_count > 0 {
             return Some(Alert {
@@ -308,18 +316,10 @@ mod tests {
         let recent: Vec<AgentEvent> = (0..6)
             .map(|i| {
                 let decision = if i < 4 { "deny" } else { "allow" };
-                make_event(
-                    "authz_decision",
-                    "patroclus",
-                    json!({"decision": decision}),
-                )
+                make_event("authz_decision", "patroclus", json!({"decision": decision}))
             })
             .collect();
-        let event = make_event(
-            "authz_decision",
-            "patroclus",
-            json!({"decision": "deny"}),
-        );
+        let event = make_event("authz_decision", "patroclus", json!({"decision": "deny"}));
 
         let alerts = engine.check_event(&event, &recent);
         assert!(alerts.iter().any(|a| a.alert_type == "high_denial_rate"));

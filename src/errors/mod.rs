@@ -32,13 +32,15 @@ impl IntoResponse for SentielError {
             SentielError::EventNotFound(_) | SentielError::NotFound(_) => {
                 (StatusCode::NOT_FOUND, self.to_string())
             }
-            SentielError::DlpViolation(_) => {
-                (StatusCode::FORBIDDEN, self.to_string())
-            }
+            SentielError::DlpViolation(_) => (StatusCode::FORBIDDEN, self.to_string()),
             _ => (StatusCode::INTERNAL_SERVER_ERROR, self.to_string()),
         };
         (status, Json(serde_json::json!({ "error": message }))).into_response()
     }
 }
 
-use axum::{http::StatusCode, response::{IntoResponse, Response}, Json};
+use axum::{
+    Json,
+    http::StatusCode,
+    response::{IntoResponse, Response},
+};
