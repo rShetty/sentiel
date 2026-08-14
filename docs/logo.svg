@@ -1,49 +1,55 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
   <defs>
-    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" style="stop-color:#0f1117;stop-opacity:1" />
-      <stop offset="100%" style="stop-color:#1a1d29;stop-opacity:1" />
+    <linearGradient id="bgGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#1a1f3a;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#221a2e;stop-opacity:1" />
     </linearGradient>
-    <linearGradient id="accent" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" style="stop-color:#e94560;stop-opacity:1" />
-      <stop offset="100%" style="stop-color:#c23152;stop-opacity:1" />
+    <linearGradient id="eyeGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#ff4d6d;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#ff6b35;stop-opacity:1" />
+    </linearGradient>
+    <linearGradient id="shieldGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#ff6b8a;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#ff4d6d;stop-opacity:1" />
     </linearGradient>
   </defs>
 
   <!-- Background: rounded square -->
-  <rect x="32" y="32" width="448" height="448" rx="48" fill="url(#bg)" stroke="#2a2d3a" stroke-width="2"/>
+  <rect x="32" y="32" width="448" height="448" rx="48" fill="url(#bgGrad)" stroke="#3a3d5a" stroke-width="2"/>
 
   <!-- Eye outline (observation/monitoring) -->
-  <ellipse cx="256" cy="220" rx="140" ry="80" fill="none" stroke="url(#accent)" stroke-width="4"/>
+  <ellipse cx="256" cy="220" rx="140" ry="80" fill="none" stroke="url(#eyeGrad)" stroke-width="5"/>
 
-  <!-- Iris -->
-  <circle cx="256" cy="220" r="50" fill="none" stroke="#e94560" stroke-width="3" opacity="0.6"/>
-  <circle cx="256" cy="220" r="30" fill="url(#accent)" opacity="0.3"/>
-  <circle cx="256" cy="220" r="12" fill="#e94560"/>
+  <!-- Iris rings -->
+  <circle cx="256" cy="220" r="50" fill="none" stroke="#ff6b35" stroke-width="3" opacity="0.8"/>
+  <circle cx="256" cy="220" r="35" fill="url(#eyeGrad)" opacity="0.25"/>
+  <circle cx="256" cy="220" r="22" fill="none" stroke="#ff8c42" stroke-width="2.5" opacity="0.7"/>
+  <circle cx="256" cy="220" r="14" fill="#ff4d6d"/>
+
+  <!-- Pupil highlight -->
+  <circle cx="250" cy="214" r="4" fill="#ffffff" opacity="0.8"/>
 
   <!-- Shield overlay (protection/DLP) -->
-  <path d="M 256 310 L 200 330 L 200 380 Q 200 420 256 450 Q 312 420 312 380 L 312 330 Z"
-        fill="none" stroke="url(#accent)" stroke-width="3" opacity="0.7"/>
-  <path d="M 256 310 L 200 330 L 200 380 Q 200 420 256 450 Q 312 420 312 380 L 312 330 Z"
-        fill="url(#accent)" opacity="0.1"/>
+  <path d="M 256 310 L 198 332 L 198 382 Q 198 422 256 452 Q 314 422 314 382 L 314 332 Z"
+        fill="url(#shieldGrad)" opacity="0.15" stroke="url(#shieldGrad)" stroke-width="4"/>
 
   <!-- Checkmark inside shield (compliance) -->
-  <path d="M 235 380 L 250 395 L 280 360"
-        fill="none" stroke="#e94560" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M 232 378 L 250 396 L 284 358"
+        fill="none" stroke="#ffaa55" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>
 
   <!-- Data flow lines (telemetry) -->
-  <g stroke="#e94560" stroke-width="2" fill="none" opacity="0.5">
-    <line x1="100" y1="100" x2="160" y2="180" stroke-dasharray="4,4"/>
-    <line x1="412" y1="100" x2="352" y2="180" stroke-dasharray="4,4"/>
-    <line x1="100" y1="340" x2="180" y2="340" stroke-dasharray="4,4"/>
-    <line x1="412" y1="340" x2="332" y2="340" stroke-dasharray="4,4"/>
-    <circle cx="100" cy="100" r="4" fill="#e94560" opacity="0.8"/>
-    <circle cx="412" cy="100" r="4" fill="#e94560" opacity="0.8"/>
-    <circle cx="100" cy="340" r="4" fill="#e94560" opacity="0.8"/>
-    <circle cx="412" cy="340" r="4" fill="#e94560" opacity="0.8"/>
+  <g stroke="#ff8c42" stroke-width="2.5" fill="none" opacity="0.9">
+    <line x1="95" y1="100" x2="155" y2="175" stroke-dasharray="5,4"/>
+    <line x1="417" y1="100" x2="357" y2="175" stroke-dasharray="5,4"/>
+    <line x1="95" y1="335" x2="175" y2="335" stroke-dasharray="5,4"/>
+    <line x1="417" y1="335" x2="337" y2="335" stroke-dasharray="5,4"/>
+    <circle cx="95" cy="100" r="5" fill="#ff8c42"/>
+    <circle cx="417" cy="100" r="5" fill="#ff8c42"/>
+    <circle cx="95" cy="335" r="5" fill="#ff8c42"/>
+    <circle cx="417" cy="335" r="5" fill="#ff8c42"/>
   </g>
 
   <!-- Text -->
-  <text x="256" y="490" text-anchor="middle" font-family="Helvetica, Arial, sans-serif"
-        font-size="28" font-weight="bold" fill="#e94560" letter-spacing="6">SENTIEL</text>
+  <text x="256" y="492" text-anchor="middle" font-family="Helvetica, Arial, sans-serif"
+        font-size="28" font-weight="bold" fill="#ff8c42" letter-spacing="6">SENTIEL</text>
 </svg>
