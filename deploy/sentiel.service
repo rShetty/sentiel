@@ -1,0 +1,22 @@
+[Unit]
+Description=Sentiel Observability & DLP
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=sentiel
+Group=sentiel
+EnvironmentFile=/etc/sentiel/sentiel.env
+ExecStart=/usr/local/bin/sentiel serve --config /etc/sentiel/sentiel.toml
+Restart=always
+RestartSec=3
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/sentiel
+LimitNOFILE=65536
+
+[Install]
+WantedBy=multi-user.target
