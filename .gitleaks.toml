@@ -1,0 +1,7 @@
+title = "sentiel config"
+
+[allowlist]
+description = "Allow test fixtures in DLP tests"
+paths = [
+    '''src/dlp/mod.rs''',
+]
