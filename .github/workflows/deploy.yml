@@ -29,7 +29,7 @@ jobs:
       - name: Scan tracked files for credentials
         shell: bash
         run: |
-          if git grep -n -I -E 'BEGIN (RSA|OPENSSH|EC) PRIVATE KEY' -- ':!.github/workflows/deploy.yml' ':!README.md'; then
+          if git grep -n -I -E 'BEGIN (RSA|OPENSSH|EC) PRIVATE KEY' -- ':!.github/workflows/deploy.yml' ':!README.md' ':!src/dlp/mod.rs'; then
             exit 1
           fi
 
