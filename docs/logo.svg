@@ -1,0 +1,49 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#0f1117;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#1a1d29;stop-opacity:1" />
+    </linearGradient>
+    <linearGradient id="accent" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#e94560;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#c23152;stop-opacity:1" />
+    </linearGradient>
+  </defs>
+
+  <!-- Background: rounded square -->
+  <rect x="32" y="32" width="448" height="448" rx="48" fill="url(#bg)" stroke="#2a2d3a" stroke-width="2"/>
+
+  <!-- Eye outline (observation/monitoring) -->
+  <ellipse cx="256" cy="220" rx="140" ry="80" fill="none" stroke="url(#accent)" stroke-width="4"/>
+
+  <!-- Iris -->
+  <circle cx="256" cy="220" r="50" fill="none" stroke="#e94560" stroke-width="3" opacity="0.6"/>
+  <circle cx="256" cy="220" r="30" fill="url(#accent)" opacity="0.3"/>
+  <circle cx="256" cy="220" r="12" fill="#e94560"/>
+
+  <!-- Shield overlay (protection/DLP) -->
+  <path d="M 256 310 L 200 330 L 200 380 Q 200 420 256 450 Q 312 420 312 380 L 312 330 Z"
+        fill="none" stroke="url(#accent)" stroke-width="3" opacity="0.7"/>
+  <path d="M 256 310 L 200 330 L 200 380 Q 200 420 256 450 Q 312 420 312 380 L 312 330 Z"
+        fill="url(#accent)" opacity="0.1"/>
+
+  <!-- Checkmark inside shield (compliance) -->
+  <path d="M 235 380 L 250 395 L 280 360"
+        fill="none" stroke="#e94560" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
+
+  <!-- Data flow lines (telemetry) -->
+  <g stroke="#e94560" stroke-width="2" fill="none" opacity="0.5">
+    <line x1="100" y1="100" x2="160" y2="180" stroke-dasharray="4,4"/>
+    <line x1="412" y1="100" x2="352" y2="180" stroke-dasharray="4,4"/>
+    <line x1="100" y1="340" x2="180" y2="340" stroke-dasharray="4,4"/>
+    <line x1="412" y1="340" x2="332" y2="340" stroke-dasharray="4,4"/>
+    <circle cx="100" cy="100" r="4" fill="#e94560" opacity="0.8"/>
+    <circle cx="412" cy="100" r="4" fill="#e94560" opacity="0.8"/>
+    <circle cx="100" cy="340" r="4" fill="#e94560" opacity="0.8"/>
+    <circle cx="412" cy="340" r="4" fill="#e94560" opacity="0.8"/>
+  </g>
+
+  <!-- Text -->
+  <text x="256" y="490" text-anchor="middle" font-family="Helvetica, Arial, sans-serif"
+        font-size="28" font-weight="bold" fill="#e94560" letter-spacing="6">SENTIEL</text>
+</svg>
