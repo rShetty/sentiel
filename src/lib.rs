@@ -7,5 +7,6 @@ pub mod db;
 pub mod dlp;
 pub mod errors;
 pub mod events;
+pub mod metrics;
 pub mod retention;
 pub mod server;

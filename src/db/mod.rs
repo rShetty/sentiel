@@ -27,6 +27,13 @@ impl PruneReport {
 }
 
 impl Database {
+    /// Cheap liveness probe for the database: runs a trivial query.
+    pub fn health_check(&self) -> Result<()> {
+        let conn = self.conn.lock();
+        conn.query_row("SELECT 1", [], |_| Ok(()))?;
+        Ok(())
+    }
+
     pub fn new(path: &str) -> Result<Self> {
         let conn = Connection::open(path)
             .map_err(|e| SentielError::Database(format!("failed to open database: {}", e)))?;

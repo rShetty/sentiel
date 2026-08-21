@@ -59,7 +59,10 @@ async fn main() -> anyhow::Result<()> {
             }
 
             let db = Arc::new(Database::new(&config.database.path)?);
+            let metrics =
+                std::sync::Arc::new(sentiel::metrics::Metrics::new().expect("metrics registry"));
             let state = AppState {
+                metrics,
                 db: Arc::clone(&db),
                 dlp: Arc::new(DlpEngine::new(config.dlp.enabled)),
                 anomaly: Arc::new(AnomalyEngine::new(config.anomaly.clone())),

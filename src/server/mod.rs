@@ -30,6 +30,7 @@ pub struct AppState {
     pub anomaly: Arc<AnomalyEngine>,
     pub config: Arc<Config>,
     pub auth: Arc<AuthConfig>,
+    pub metrics: Arc<crate::metrics::Metrics>,
     /// Cumulative pruning counters (background loop + manual endpoint).
     pub prune_stats: Arc<PruneStats>,
 }
@@ -57,6 +58,8 @@ pub fn create_router(state: AppState) -> Router {
     Router::new()
         .route("/", get(dashboard))
         .route("/health", get(health))
+        .route("/health/ready", get(health_ready))
+        .route("/metrics", get(metrics_endpoint))
         .route("/api/events", post(ingest_event).get(list_events))
         .route("/api/events/query", get(query_events))
         .route("/api/events/session/{session_id}", get(events_by_session))
@@ -203,6 +206,24 @@ async fn health() -> (StatusCode, Json<serde_json::Value>) {
     )
 }
 
+/// Readiness: DB answers a trivial query.
+async fn health_ready(State(state): State<AppState>) -> (StatusCode, Json<serde_json::Value>) {
+    match state.db.health_check() {
+        Ok(()) => (
+            StatusCode::OK,
+            Json(serde_json::json!({ "status": "ready", "database": "ok" })),
+        ),
+        Err(e) => (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(serde_json::json!({ "status": "not-ready", "database": e.to_string() })),
+        ),
+    }
+}
+
+async fn metrics_endpoint(State(state): State<AppState>) -> (StatusCode, String) {
+    (StatusCode::OK, state.metrics.render())
+}
+
 async fn dashboard() -> (StatusCode, String) {
     (StatusCode::OK, crate::dashboard::dashboard_html())
 }
@@ -229,6 +250,7 @@ async fn ingest_event(
     // DLP inspection
     let violations = state.dlp.inspect_json(&event.data);
     if !violations.is_empty() {
+        state.metrics.dlp_violations.inc_by(violations.len() as u64);
         event.dlp_violations = Some(violations.clone());
         if state.dlp.has_critical_violation(&violations) {
             event.severity = "critical".to_string();
@@ -240,6 +262,7 @@ async fn ingest_event(
     let alerts = state.anomaly.check_event(&event, &recent);
     if !alerts.is_empty() {
         event.anomaly_flags = Some(alerts.iter().map(|a| a.alert_type.clone()).collect());
+        state.metrics.anomaly_alerts.inc_by(alerts.len() as u64);
         for alert in &alerts {
             if let Err(e) = state.db.insert_alert(alert) {
                 tracing::warn!("Failed to insert alert: {}", e);
@@ -247,6 +270,11 @@ async fn ingest_event(
         }
     }
 
+    state
+        .metrics
+        .events_ingested
+        .with_label_values(&[&event.source, &event.event_type])
+        .inc();
     let id = state.db.insert_event(&event)?;
     Ok(Json(serde_json::json!({
         "id": id,
@@ -445,6 +473,7 @@ mod tests {
             config: Arc::new(Config::default()),
             auth: Arc::new(auth),
             prune_stats: Arc::new(crate::retention::PruneStats::new()),
+            metrics: Arc::new(crate::metrics::Metrics::new().expect("metrics")),
         }
     }
 
@@ -885,5 +914,49 @@ mod tests {
         assert_eq!(status, StatusCode::OK);
         assert_eq!(body["events_deleted"], 0);
         assert_eq!(body["alerts_deleted"], 0);
+    }
+    #[tokio::test]
+    async fn metrics_endpoint_renders_and_counters_increment() {
+        let state = test_state(AuthConfig {
+            admin_token: Some("admin".into()),
+            ingest_token: None,
+            insecure_dev: false,
+        });
+        let app = create_router(state.clone());
+        let body = serde_json::json!({
+            "source": "miser",
+            "event_type": "llm_cost",
+            "agent_id": "a1",
+            "data": {"tokens": 10}
+        });
+        let req = Request::builder()
+            .method(axum::http::Method::POST)
+            .uri("/api/events")
+            .header(header::AUTHORIZATION, bearer("admin"))
+            .header("content-type", "application/json")
+            .body(Body::from(body.to_string()))
+            .unwrap();
+        let (status, json) = send(app, req).await;
+        assert!(status.is_success(), "{json}");
+        let rendered = state.metrics.render();
+        assert!(rendered.contains("sentiel_events_ingested_total"));
+    }
+
+    #[tokio::test]
+    async fn ready_probe_ok_when_db_up() {
+        let state = test_state(AuthConfig {
+            admin_token: Some("admin".into()),
+            ingest_token: None,
+            insecure_dev: false,
+        });
+        let app = create_router(state);
+        let req = Request::builder()
+            .method(axum::http::Method::GET)
+            .uri("/health/ready")
+            .header(header::AUTHORIZATION, bearer("admin"))
+            .body(Body::empty())
+            .unwrap();
+        let (status, _) = send(app, req).await;
+        assert!(status.is_success());
     }
 }
