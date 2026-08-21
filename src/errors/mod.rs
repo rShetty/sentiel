@@ -16,6 +16,15 @@ pub enum SentielError {
 
     #[error("not found: {0}")]
     NotFound(String),
+
+    #[error("validation failed: {}", .0.join("; "))]
+    Validation(Vec<String>),
+
+    /// Request rejected before reaching a handler (malformed JSON, missing or
+    /// mistyped fields). Carries the HTTP status the rejection maps to:
+    /// 400 for unparsable JSON, 422 for schema violations.
+    #[error("invalid request: {message}")]
+    InvalidRequest { status: StatusCode, message: String },
 }
 
 pub type Result<T> = std::result::Result<T, SentielError>;
@@ -33,9 +42,15 @@ impl IntoResponse for SentielError {
                 (StatusCode::NOT_FOUND, self.to_string())
             }
             SentielError::DlpViolation(_) => (StatusCode::FORBIDDEN, self.to_string()),
+            SentielError::Validation(_) => (StatusCode::UNPROCESSABLE_ENTITY, self.to_string()),
+            SentielError::InvalidRequest { status, .. } => (*status, self.to_string()),
             _ => (StatusCode::INTERNAL_SERVER_ERROR, self.to_string()),
         };
-        (status, Json(serde_json::json!({ "error": message }))).into_response()
+        let mut body = serde_json::json!({ "error": message });
+        if let SentielError::Validation(details) = &self {
+            body["details"] = serde_json::json!(details);
+        }
+        (status, Json(body)).into_response()
     }
 }
 

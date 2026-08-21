@@ -1,6 +1,8 @@
 [server]
 host = "0.0.0.0"
 port = 8585
+# Maximum accepted request body size (bytes). Larger requests get 413.
+max_payload_bytes = 262144
 
 [database]
 path = "/var/lib/sentiel/sentiel.db"

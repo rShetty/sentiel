@@ -96,15 +96,15 @@ impl AuthConfig {
     /// comparisons against the configured secrets.
     pub fn authenticate(&self, presented: &str) -> Option<Role> {
         let bytes = presented.as_bytes();
-        if let Some(admin) = self.admin_token.as_deref() {
-            if constant_time_eq(bytes, admin.as_bytes()) {
-                return Some(Role::Admin);
-            }
+        if let Some(admin) = self.admin_token.as_deref()
+            && constant_time_eq(bytes, admin.as_bytes())
+        {
+            return Some(Role::Admin);
         }
-        if let Some(ingest) = self.ingest_token.as_deref() {
-            if constant_time_eq(bytes, ingest.as_bytes()) {
-                return Some(Role::Ingest);
-            }
+        if let Some(ingest) = self.ingest_token.as_deref()
+            && constant_time_eq(bytes, ingest.as_bytes())
+        {
+            return Some(Role::Ingest);
         }
         None
     }

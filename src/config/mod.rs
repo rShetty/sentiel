@@ -1,11 +1,16 @@
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Config {
     pub server: ServerConfig,
     pub database: DatabaseConfig,
     pub dlp: DlpConfig,
     pub anomaly: AnomalyConfig,
+}
+
+/// Default ingest payload cap: 256 KiB.
+fn default_max_payload_bytes() -> usize {
+    256 * 1024
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -15,6 +20,10 @@ pub struct ServerConfig {
     /// Allowed CORS origins. Empty = no cross-origin browser access.
     #[serde(default)]
     pub cors_allowed_origins: Vec<String>,
+    /// Maximum accepted request body size in bytes. Larger requests are
+    /// rejected with `413 Payload Too Large`.
+    #[serde(default = "default_max_payload_bytes")]
+    pub max_payload_bytes: usize,
 }
 
 impl Default for ServerConfig {
@@ -23,6 +32,7 @@ impl Default for ServerConfig {
             host: "127.0.0.1".to_string(),
             port: 8585,
             cors_allowed_origins: vec![],
+            max_payload_bytes: default_max_payload_bytes(),
         }
     }
 }
@@ -72,17 +82,6 @@ impl Default for AnomalyConfig {
             denial_rate_threshold: 0.5,
             off_hours_start: 22,
             off_hours_end: 6,
-        }
-    }
-}
-
-impl Default for Config {
-    fn default() -> Self {
-        Config {
-            server: ServerConfig::default(),
-            database: DatabaseConfig::default(),
-            dlp: DlpConfig::default(),
-            anomaly: AnomalyConfig::default(),
         }
     }
 }

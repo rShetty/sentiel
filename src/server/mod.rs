@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use axum::{
     Json, Router,
+    body::{Body, to_bytes},
     extract::{Path, Query, Request, State},
     http::{Method, StatusCode, header},
     middleware::{self, Next},
@@ -66,6 +67,10 @@ pub fn create_router(state: AppState) -> Router {
         .route("/api/compliance/{framework}", get(compliance_report))
         .route("/api/cost/summary", get(cost_summary))
         .route("/api/decisions/summary", get(decision_summary))
+        .layer(middleware::from_fn_with_state(
+            state.clone(),
+            payload_limit_middleware,
+        ))
         .layer(middleware::from_fn_with_state(
             state.clone(),
             auth_middleware,
@@ -141,6 +146,53 @@ fn forbidden_response() -> Response {
         .into_response()
 }
 
+/// Enforce the configured maximum request-body size.
+///
+/// Sits inside the auth middleware so unauthenticated requests are rejected
+/// with 401 before any body bytes are buffered. Two-stage enforcement:
+///
+/// 1. Fast path: a declared `Content-Length` over the limit is rejected
+///    without reading the body at all.
+/// 2. The body is then buffered under a hard cap, so chunked or unspecified
+///    lengths cannot slip past the limit.
+async fn payload_limit_middleware(
+    State(state): State<AppState>,
+    req: Request,
+    next: Next,
+) -> Response {
+    let limit = state.config.server.max_payload_bytes;
+
+    if let Some(len) = req
+        .headers()
+        .get(header::CONTENT_LENGTH)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.parse::<u64>().ok())
+        && len > limit as u64
+    {
+        return payload_too_large(limit);
+    }
+
+    let (parts, body) = req.into_parts();
+    match to_bytes(body, limit).await {
+        Ok(bytes) => {
+            next.run(Request::from_parts(parts, Body::from(bytes)))
+                .await
+        }
+        Err(_) => payload_too_large(limit),
+    }
+}
+
+fn payload_too_large(limit: usize) -> Response {
+    (
+        StatusCode::PAYLOAD_TOO_LARGE,
+        Json(serde_json::json!({
+            "error": format!("payload too large: maximum accepted body is {limit} bytes"),
+            "max_payload_bytes": limit,
+        })),
+    )
+        .into_response()
+}
+
 async fn health() -> (StatusCode, Json<serde_json::Value>) {
     (
         StatusCode::OK,
@@ -154,8 +206,21 @@ async fn dashboard() -> (StatusCode, String) {
 
 async fn ingest_event(
     State(state): State<AppState>,
-    Json(req): Json<crate::events::CreateEvent>,
+    payload: Result<Json<crate::events::CreateEvent>, axum::extract::rejection::JsonRejection>,
 ) -> Result<Json<serde_json::Value>, crate::errors::SentielError> {
+    // Malformed JSON (400) and missing/mistyped fields (422) are surfaced as
+    // JSON errors instead of axum's default plain-text rejections.
+    let Json(req) = payload.map_err(|rejection| crate::errors::SentielError::InvalidRequest {
+        status: rejection.status(),
+        message: rejection.body_text(),
+    })?;
+
+    // Strict schema gate: reject unknown sources/event types, bad severities,
+    // and non-object payloads with a 422 listing every violation.
+    if let Err(details) = req.validate() {
+        return Err(crate::errors::SentielError::Validation(details));
+    }
+
     let mut event = req.to_agent_event();
 
     // DLP inspection
@@ -356,6 +421,13 @@ mod tests {
         }
     }
 
+    fn test_state_with(config: Config, auth: AuthConfig) -> AppState {
+        AppState {
+            config: Arc::new(config),
+            ..test_state(auth)
+        }
+    }
+
     fn bearer(value: &str) -> String {
         format!("Bearer {value}")
     }
@@ -509,5 +581,186 @@ mod tests {
         let (status, _) = send(app.clone(), get("/", None)).await;
         assert_eq!(status, StatusCode::OK);
         assert!(send(app.clone(), get("/health", None)).await.0.is_success());
+    }
+
+    // --- Issue #8: payload size limits -----------------------------------
+
+    fn authed_admin() -> AuthConfig {
+        AuthConfig {
+            admin_token: Some("admin".into()),
+            ingest_token: Some("ingest".into()),
+            insecure_dev: false,
+        }
+    }
+
+    #[tokio::test]
+    async fn oversized_payload_is_rejected_with_413() {
+        let mut config = Config::default();
+        config.server.max_payload_bytes = 64;
+        let app = create_router(test_state_with(config, authed_admin()));
+
+        let big_body = serde_json::json!({
+            "source": "miser",
+            "event_type": "llm_cost",
+            "data": {"blob": "x".repeat(1024)}
+        })
+        .to_string();
+
+        let (status, body) = send(app, post_json("/api/events", "ingest", big_body)).await;
+        assert_eq!(status, StatusCode::PAYLOAD_TOO_LARGE);
+        assert!(
+            body["error"]
+                .as_str()
+                .unwrap()
+                .contains("payload too large")
+        );
+        assert_eq!(body["max_payload_bytes"], 64);
+    }
+
+    #[tokio::test]
+    async fn declared_content_length_over_limit_is_rejected_without_read() {
+        let mut config = Config::default();
+        config.server.max_payload_bytes = 32;
+        let app = create_router(test_state_with(config, authed_admin()));
+
+        // Tiny actual body with an inflated Content-Length header: the fast
+        // path must reject on the header alone.
+        let req = Request::post("/api/events")
+            .header(header::AUTHORIZATION, bearer("ingest"))
+            .header(header::CONTENT_TYPE, "application/json")
+            .header(header::CONTENT_LENGTH, "999999")
+            .body(Body::from("{}"))
+            .unwrap();
+
+        let (status, _) = send(app, req).await;
+        assert_eq!(status, StatusCode::PAYLOAD_TOO_LARGE);
+    }
+
+    #[tokio::test]
+    async fn payload_at_exact_limit_is_accepted() {
+        let body = valid_event_body();
+        let mut config = Config::default();
+        config.server.max_payload_bytes = body.len();
+        let app = create_router(test_state_with(config, authed_admin()));
+
+        let (status, resp) = send(app, post_json("/api/events", "ingest", body)).await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(resp["id"].is_string());
+    }
+
+    // --- Issue #8: strict schema validation ------------------------------
+
+    #[tokio::test]
+    async fn unknown_source_returns_422_listing_allowed_values() {
+        let app = create_router(test_state(authed_admin()));
+
+        let body = serde_json::json!({
+            "source": "rogue-agent",
+            "event_type": "llm_cost",
+            "data": {"cost": 0.01}
+        })
+        .to_string();
+
+        let (status, resp) = send(app, post_json("/api/events", "ingest", body)).await;
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+        assert!(resp["error"].as_str().unwrap().contains("invalid source"));
+        assert!(
+            resp["error"]
+                .as_str()
+                .unwrap()
+                .contains("miser, patroclus, relay")
+        );
+        assert!(!resp["details"].as_array().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn unknown_event_type_returns_422() {
+        let app = create_router(test_state(authed_admin()));
+
+        let body = serde_json::json!({
+            "source": "miser",
+            "event_type": "keyboard_event",
+            "data": {}
+        })
+        .to_string();
+
+        let (status, resp) = send(app, post_json("/api/events", "ingest", body)).await;
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+        assert!(
+            resp["error"]
+                .as_str()
+                .unwrap()
+                .contains("invalid event_type")
+        );
+    }
+
+    #[tokio::test]
+    async fn invalid_severity_returns_422() {
+        let app = create_router(test_state(authed_admin()));
+
+        let body = serde_json::json!({
+            "source": "miser",
+            "event_type": "llm_cost",
+            "severity": "catastrophic",
+            "data": {"cost": 0.01}
+        })
+        .to_string();
+
+        let (status, resp) = send(app, post_json("/api/events", "ingest", body)).await;
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+        assert!(resp["error"].as_str().unwrap().contains("invalid severity"));
+    }
+
+    #[tokio::test]
+    async fn non_object_data_returns_422() {
+        let app = create_router(test_state(authed_admin()));
+
+        for bad_data in ["\"just a string\"", "[1, 2, 3]", "null", "42"] {
+            let body = format!(r#"{{"source":"miser","event_type":"llm_cost","data":{bad_data}}}"#);
+            let (status, resp) = send(app.clone(), post_json("/api/events", "ingest", body)).await;
+            assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "data: {bad_data}");
+            assert!(
+                resp["error"]
+                    .as_str()
+                    .unwrap()
+                    .contains("expected a JSON object"),
+                "data: {bad_data}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn missing_required_field_returns_422() {
+        let app = create_router(test_state(authed_admin()));
+
+        // `event_type` omitted entirely.
+        let body = r#"{"source":"miser","data":{"cost":0.01}}"#;
+        let (status, resp) = send(app, post_json("/api/events", "ingest", body.to_string())).await;
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+        assert!(resp["error"].as_str().unwrap().contains("event_type"));
+    }
+
+    #[tokio::test]
+    async fn wrong_typed_field_returns_422() {
+        let app = create_router(test_state(authed_admin()));
+
+        // `source` must be a string, not a number.
+        let body = r#"{"source":42,"event_type":"llm_cost","data":{}}"#;
+        let (status, resp) = send(app, post_json("/api/events", "ingest", body.to_string())).await;
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+        assert!(resp["error"].as_str().unwrap().contains("source"));
+    }
+
+    #[tokio::test]
+    async fn malformed_json_returns_400() {
+        let app = create_router(test_state(authed_admin()));
+
+        let (status, resp) = send(
+            app,
+            post_json("/api/events", "ingest", "{not valid json".to_string()),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert!(resp["error"].is_string());
     }
 }
