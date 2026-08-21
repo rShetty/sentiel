@@ -6,6 +6,10 @@ max_payload_bytes = 262144
 
 [database]
 path = "/var/lib/sentiel/sentiel.db"
+# Delete events/alerts older than this many days (background + admin endpoint).
+retention_days = 90
+# Seconds between background pruning passes.
+prune_interval_secs = 3600
 
 [dlp]
 enabled = true

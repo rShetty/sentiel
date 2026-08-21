@@ -8,6 +8,7 @@ use sentiel::{
     config::Config,
     db::Database,
     dlp::DlpEngine,
+    retention,
     server::{self, AppState},
 };
 
@@ -57,14 +58,23 @@ async fn main() -> anyhow::Result<()> {
                 anyhow::bail!(message);
             }
 
-            let db = Database::new(&config.database.path)?;
+            let db = Arc::new(Database::new(&config.database.path)?);
             let state = AppState {
-                db: Arc::new(db),
+                db: Arc::clone(&db),
                 dlp: Arc::new(DlpEngine::new(config.dlp.enabled)),
                 anomaly: Arc::new(AnomalyEngine::new(config.anomaly.clone())),
                 config: Arc::new(config.clone()),
                 auth: Arc::new(auth),
+                prune_stats: Arc::new(retention::PruneStats::new()),
             };
+
+            // Background retention: prune expired rows on an interval.
+            tokio::spawn(retention::pruning_loop(
+                Arc::clone(&db),
+                config.database.retention_days,
+                config.database.prune_interval_secs,
+                Arc::clone(&state.prune_stats),
+            ));
 
             let app = server::create_router(state);
             let addr = format!("{}:{}", config.server.host, config.server.port);

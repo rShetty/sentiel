@@ -1,7 +1,8 @@
 use std::sync::Arc;
 
-use chrono::Utc;
+use chrono::{Duration, Utc};
 use rusqlite::{Connection, params};
+use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::errors::{Result, SentielError};
@@ -9,6 +10,20 @@ use crate::events::AgentEvent;
 
 pub struct Database {
     conn: Arc<parking_lot::Mutex<Connection>>,
+}
+
+/// Rows removed by a single pruning pass.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PruneReport {
+    pub events_deleted: usize,
+    pub alerts_deleted: usize,
+}
+
+impl PruneReport {
+    /// Whether this pass removed nothing.
+    pub fn is_zero(&self) -> bool {
+        self.events_deleted == 0 && self.alerts_deleted == 0
+    }
 }
 
 impl Database {
@@ -258,6 +273,23 @@ impl Database {
             return Err(SentielError::NotFound("alert not found".to_string()));
         }
         Ok(())
+    }
+
+    /// Delete events and alerts older than `retention_days`.
+    ///
+    /// DLP violations are stored on events, so pruning events covers them.
+    /// Returns how many rows of each kind were removed.
+    pub fn prune_expired(&self, retention_days: u32) -> Result<PruneReport> {
+        let cutoff = (Utc::now() - Duration::days(i64::from(retention_days))).to_rfc3339();
+        let conn = self.conn.lock();
+        let events_deleted =
+            conn.execute("DELETE FROM events WHERE timestamp < ?", params![cutoff])?;
+        let alerts_deleted =
+            conn.execute("DELETE FROM alerts WHERE created_at < ?", params![cutoff])?;
+        Ok(PruneReport {
+            events_deleted,
+            alerts_deleted,
+        })
     }
 
     pub fn cost_summary(&self) -> Result<serde_json::Value> {

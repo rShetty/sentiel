@@ -19,6 +19,7 @@ use crate::{
     db::Database,
     dlp::DlpEngine,
     events::AgentEvent,
+    retention::PruneStats,
 };
 
 /// Shared application state threaded through all handlers.
@@ -27,9 +28,10 @@ pub struct AppState {
     pub db: Arc<Database>,
     pub dlp: Arc<DlpEngine>,
     pub anomaly: Arc<AnomalyEngine>,
-    #[allow(dead_code)] // consumed by retention/metrics wiring in follow-up hardening
     pub config: Arc<Config>,
     pub auth: Arc<AuthConfig>,
+    /// Cumulative pruning counters (background loop + manual endpoint).
+    pub prune_stats: Arc<PruneStats>,
 }
 
 /// Build the full HTTP router for Sentiel.
@@ -67,6 +69,7 @@ pub fn create_router(state: AppState) -> Router {
         .route("/api/compliance/{framework}", get(compliance_report))
         .route("/api/cost/summary", get(cost_summary))
         .route("/api/decisions/summary", get(decision_summary))
+        .route("/api/admin/prune", post(admin_prune))
         .layer(middleware::from_fn_with_state(
             state.clone(),
             payload_limit_middleware,
@@ -328,6 +331,13 @@ async fn stats(
         "denies": denies,
         "dlp_violations": dlp_count,
         "active_alerts": alerts.len(),
+        "pruned_events": state.prune_stats.events_pruned(),
+        "pruned_alerts": state.prune_stats.alerts_pruned(),
+        "last_pruned_at": state
+            .prune_stats
+            .last_pruned_at()
+            .map(|t| t.to_rfc3339()),
+        "retention_days": state.config.database.retention_days,
     })))
 }
 
@@ -404,6 +414,22 @@ async fn decision_summary(
     Ok(Json(summary))
 }
 
+/// Manual retention pass (admin scope): delete rows older than the
+/// configured `retention_days` and fold the counts into the shared stats.
+async fn admin_prune(
+    State(state): State<AppState>,
+) -> Result<Json<serde_json::Value>, crate::errors::SentielError> {
+    let report = state
+        .db
+        .prune_expired(state.config.database.retention_days)?;
+    state.prune_stats.record(&report);
+    Ok(Json(serde_json::json!({
+        "retention_days": state.config.database.retention_days,
+        "events_deleted": report.events_deleted,
+        "alerts_deleted": report.alerts_deleted,
+    })))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -418,6 +444,7 @@ mod tests {
             anomaly: Arc::new(AnomalyEngine::new(crate::config::AnomalyConfig::default())),
             config: Arc::new(Config::default()),
             auth: Arc::new(auth),
+            prune_stats: Arc::new(crate::retention::PruneStats::new()),
         }
     }
 
@@ -762,5 +789,101 @@ mod tests {
         .await;
         assert_eq!(status, StatusCode::BAD_REQUEST);
         assert!(resp["error"].is_string());
+    }
+
+    // --- Issue #3: retention and pruning ---------------------------------
+
+    fn old_event(age_days: i64) -> AgentEvent {
+        AgentEvent {
+            id: None,
+            source: "miser".to_string(),
+            session_id: None,
+            agent_id: None,
+            principal_id: None,
+            event_type: "llm_cost".to_string(),
+            severity: "info".to_string(),
+            data: serde_json::json!({"cost": 0.01}),
+            dlp_violations: None,
+            anomaly_flags: None,
+            timestamp: Some(chrono::Utc::now() - chrono::Duration::days(age_days)),
+        }
+    }
+
+    fn old_alert(age_days: i64) -> crate::anomaly::Alert {
+        crate::anomaly::Alert {
+            id: uuid::Uuid::now_v7(),
+            session_id: None,
+            agent_id: None,
+            alert_type: "spending_spike".to_string(),
+            severity: "high".to_string(),
+            message: "stale alert".to_string(),
+            data: None,
+            acknowledged: false,
+            created_at: chrono::Utc::now() - chrono::Duration::days(age_days),
+            acknowledged_at: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn admin_prune_deletes_old_rows_and_updates_stats() {
+        let state = test_state(authed_admin());
+        state.db.insert_event(&old_event(120)).unwrap();
+        state.db.insert_event(&old_event(0)).unwrap();
+        state.db.insert_alert(&old_alert(120)).unwrap();
+        let app = create_router(state.clone());
+
+        let (status, body) = send(
+            app.clone(),
+            post_json("/api/admin/prune", "admin", "{}".to_string()),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["events_deleted"], 1);
+        assert_eq!(body["alerts_deleted"], 1);
+        assert_eq!(body["retention_days"], 90);
+
+        // Only the fresh event survives.
+        assert_eq!(state.db.list_events(100).unwrap().len(), 1);
+
+        // Prune counts surface in /api/stats.
+        let (status, stats) = send(app, get("/api/stats", Some("admin"))).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(stats["pruned_events"], 1);
+        assert_eq!(stats["pruned_alerts"], 1);
+        assert!(stats["last_pruned_at"].is_string());
+        assert_eq!(stats["retention_days"], 90);
+    }
+
+    #[tokio::test]
+    async fn ingest_token_cannot_trigger_prune() {
+        let app = create_router(test_state(AuthConfig {
+            admin_token: Some("admin".into()),
+            ingest_token: Some("ingest".into()),
+            insecure_dev: false,
+        }));
+
+        let (status, body) = send(
+            app,
+            post_json("/api/admin/prune", "ingest", "{}".to_string()),
+        )
+        .await;
+        assert_eq!(status, StatusCode::FORBIDDEN);
+        assert_eq!(body["error"], "token lacks permission for this endpoint");
+    }
+
+    #[tokio::test]
+    async fn prune_with_nothing_expired_reports_zero() {
+        let state = test_state(authed_admin());
+        state.db.insert_event(&old_event(0)).unwrap();
+        let app = create_router(state);
+
+        let (status, body) = send(
+            app,
+            post_json("/api/admin/prune", "admin", "{}".to_string()),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["events_deleted"], 0);
+        assert_eq!(body["alerts_deleted"], 0);
     }
 }
