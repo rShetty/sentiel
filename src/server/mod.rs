@@ -959,4 +959,108 @@ mod tests {
         let (status, _) = send(app, req).await;
         assert!(status.is_success());
     }
+    #[tokio::test]
+    async fn ingest_then_query_round_trip() {
+        let state = test_state(AuthConfig {
+            admin_token: Some("admin".into()),
+            ingest_token: None,
+            insecure_dev: false,
+        });
+        let app = create_router(state.clone());
+        let req = post_json("/api/events", "admin", valid_event_body());
+        let (status, body) = send(app.clone(), req).await;
+        assert!(status.is_success(), "{body}");
+        let id = body["id"].as_str().unwrap().to_string();
+
+        let req = get("/api/events/query?limit=10", Some("admin"));
+        let (status, body) = send(app.clone(), req).await;
+        assert_eq!(status, StatusCode::OK);
+        let events = body.as_array().cloned().unwrap_or_default();
+        assert!(events.iter().any(|e| e["id"].as_str() == Some(id.as_str())));
+    }
+
+    #[tokio::test]
+    async fn session_and_agent_filters_scope_results() {
+        let state = test_state(AuthConfig {
+            admin_token: Some("admin".into()),
+            ingest_token: None,
+            insecure_dev: false,
+        });
+        let app = create_router(state.clone());
+        for session in ["s1", "s2"] {
+            let body = serde_json::json!({
+                "source": "miser",
+                "event_type": "llm_cost",
+                "agent_id": format!("agent-{session}"),
+                "session_id": session,
+                "data": {"cost": 0.01}
+            });
+            let req = post_json("/api/events", "admin", body.to_string());
+            assert!(send(app.clone(), req).await.0.is_success());
+        }
+        let req = get("/api/events/session/s1", Some("admin"));
+        let (_, body) = send(app.clone(), req).await;
+        let events = body.as_array().cloned().unwrap_or_default();
+        assert!(!events.is_empty());
+        assert!(events.iter().all(|e| e["session_id"] == "s1"));
+
+        let req = get("/api/events/agent/agent-s2", Some("admin"));
+        let (_, body) = send(app.clone(), req).await;
+        let events = body.as_array().cloned().unwrap_or_default();
+        assert!(!events.is_empty());
+        assert!(events.iter().all(|e| e["agent_id"] == "agent-s2"));
+    }
+
+    #[tokio::test]
+    async fn dlp_inspect_detects_each_pattern_class() {
+        let state = test_state(AuthConfig {
+            admin_token: Some("admin".into()),
+            ingest_token: None,
+            insecure_dev: false,
+        });
+        let app = create_router(state);
+        let cases: Vec<(&str, String)> = vec![
+            ("email", "contact me at bob@example.com please".into()),
+            ("ssn", "ssn 123-45-6789".into()),
+            ("credit_card", "card 4111 1111 1111 1111".into()),
+            ("aws_key", "key AKIAIOSFODNN7EXAMPLE".into()),
+            ("github_token", "token ghp_0123456789abcdefghijklmnopqrstuvwxyzABC".into()),
+            ("slack_token", "slack xoxb-123456789012-abcdef".into()),
+            ("private_key", "-----BEGIN RSA PRIVATE KEY-----abc".into()),
+            ("jwt", "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJVadQssw5c".into()),
+        ];
+        for (class, secret) in cases {
+            let body = serde_json::json!({ "content": secret });
+            let req = post_json("/api/dlp/inspect", "admin", body.to_string());
+            let (_, out) = send(app.clone(), req).await;
+            let violations = out["violations"].as_array().cloned().unwrap_or_default();
+            assert!(
+                !violations.is_empty(),
+                "expected {class} to be detected; got {out}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn compliance_report_generates_for_framework() {
+        let state = test_state(AuthConfig {
+            admin_token: Some("admin".into()),
+            ingest_token: None,
+            insecure_dev: false,
+        });
+        let app = create_router(state.clone());
+        // Seed one authz decision so the SOC2 summary has signal.
+        let body = serde_json::json!({
+            "source": "patroclus",
+            "event_type": "authz_decision",
+            "data": {"decision": "allow"}
+        });
+        let req = post_json("/api/events", "admin", body.to_string());
+        assert!(send(app.clone(), req).await.0.is_success());
+
+        let req = get("/api/compliance/soc2", Some("admin"));
+        let (status, body) = send(app.clone(), req).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(body["framework"], "SOC 2 Type II");
+    }
 }
