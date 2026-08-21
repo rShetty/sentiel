@@ -22,6 +22,16 @@ impl Database {
         })
     }
 
+    /// Open a transient in-memory database. Intended for tests.
+    pub fn new_in_memory() -> Result<Self> {
+        let conn = Connection::open_in_memory()
+            .map_err(|e| SentielError::Database(format!("failed to open database: {}", e)))?;
+        Self::run_migrations(&conn)?;
+        Ok(Database {
+            conn: Arc::new(parking_lot::Mutex::new(conn)),
+        })
+    }
+
     fn run_migrations(conn: &Connection) -> Result<()> {
         conn.execute_batch(
             "CREATE TABLE IF NOT EXISTS events (
