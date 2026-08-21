@@ -74,6 +74,7 @@ pub fn create_router(state: AppState) -> Router {
         .route("/api/cost/summary", get(cost_summary))
         .route("/api/decisions/summary", get(decision_summary))
         .route("/api/admin/prune", post(admin_prune))
+        .route("/api/integrity", get(integrity))
         .layer(middleware::from_fn_with_state(
             state.clone(),
             payload_limit_middleware,
@@ -511,6 +512,25 @@ async fn admin_prune(
     })))
 }
 
+/// Tamper-evidence report for the event store (admin scope).
+///
+/// Walks the hash chain (see [`crate::audit`]) and returns the first broken
+/// link when the store has been tampered with. HTTP 200 either way: the
+/// verdict is data, not a server error.
+async fn integrity(
+    State(state): State<AppState>,
+) -> Result<Json<serde_json::Value>, crate::errors::SentielError> {
+    let verification = state.db.verify_event_chain()?;
+    let chain_configured = state.db.chaining_enabled() && state.config.database.chain_events;
+    Ok(Json(serde_json::json!({
+        "chain_configured": chain_configured,
+        "intact": verification.is_intact(),
+        "total_events": verification.total_events,
+        "unchained_events": verification.unchained_events,
+        "verdict": serde_json::to_value(&verification.verdict).unwrap_or_default(),
+    })))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -531,8 +551,16 @@ mod tests {
     }
 
     fn test_state_with(config: Config, auth: AuthConfig) -> AppState {
+        let db = if config.database.chain_events {
+            Database::new_in_memory()
+                .expect("in-memory db")
+                .with_event_chaining()
+        } else {
+            Database::new_in_memory().expect("in-memory db")
+        };
         AppState {
             config: Arc::new(config),
+            db: Arc::new(db),
             ..test_state(auth)
         }
     }
@@ -1305,5 +1333,143 @@ mod tests {
         let attachments = body["attachments"].as_array().expect("attachments");
         assert_eq!(attachments[0]["name"], "summary_counts");
         assert_eq!(attachments[0]["counts"]["authz_decisions"], 1);
+    }
+
+    // --- Issue #6: tamper-evident hash-chained event storage -------------
+
+    fn config_with_chaining() -> Config {
+        let mut config = Config::default();
+        config.database.chain_events = true;
+        config
+    }
+
+    #[tokio::test]
+    async fn integrity_endpoint_requires_admin() {
+        let app = create_router(test_state_with(config_with_chaining(), authed_admin()));
+
+        // Ingest tokens cannot read the integrity verdict either.
+        let (status, _) = send(app.clone(), get("/api/integrity", Some("ingest"))).await;
+        assert_eq!(status, StatusCode::FORBIDDEN);
+
+        let (status, _) = send(app, get("/api/integrity", Some("admin"))).await;
+        assert_eq!(status, StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn integrity_reports_intact_after_chained_ingest() {
+        let app = create_router(test_state_with(config_with_chaining(), authed_admin()));
+
+        for cost in [0.01, 0.02, 0.03] {
+            let body = serde_json::json!({
+                "source": "miser",
+                "event_type": "llm_cost",
+                "data": {"cost": cost}
+            })
+            .to_string();
+            let (status, resp) = send(app.clone(), post_json("/api/events", "ingest", body)).await;
+            assert_eq!(status, StatusCode::OK, "{resp}");
+        }
+
+        let (status, body) = send(app, get("/api/integrity", Some("admin"))).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["chain_configured"], true);
+        assert_eq!(body["intact"], true, "fresh chain must verify: {body}");
+        assert_eq!(body["total_events"], 3);
+        assert_eq!(body["unchained_events"], 0);
+        assert_eq!(body["verdict"]["status"], "intact");
+        assert_eq!(body["verdict"]["verified_rows"], 3);
+        // The head is a real 64-hex hash, not the genesis marker.
+        let head = body["verdict"]["head_hash"].as_str().unwrap();
+        assert_eq!(head.len(), 64);
+        assert!(head.chars().all(|c| c.is_ascii_hexdigit()));
+        assert_ne!(head, crate::audit::GENESIS);
+    }
+
+    #[tokio::test]
+    async fn integrity_without_chaining_reports_unchained_rows() {
+        // Default config: chaining disabled. Rows exist but carry no chain
+        // metadata — the endpoint must not claim the store is intact.
+        let app = create_router(test_state(authed_admin()));
+        let (status, _) = send(
+            app.clone(),
+            post_json("/api/events", "ingest", valid_event_body()),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+
+        let (status, body) = send(app, get("/api/integrity", Some("admin"))).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["chain_configured"], false);
+        assert_eq!(body["intact"], false);
+        assert_eq!(body["total_events"], 1);
+        assert_eq!(body["unchained_events"], 1);
+        assert_eq!(body["verdict"]["status"], "intact");
+    }
+
+    #[tokio::test]
+    async fn integrity_detects_tampered_row_via_endpoint() {
+        let state = test_state_with(config_with_chaining(), authed_admin());
+        let app = create_router(state.clone());
+
+        for n in 1..=3 {
+            let body = serde_json::json!({
+                "source": "miser",
+                "event_type": "llm_cost",
+                "data": {"cost": 0.01, "n": n}
+            })
+            .to_string();
+            let (status, _) = send(app.clone(), post_json("/api/events", "ingest", body)).await;
+            assert_eq!(status, StatusCode::OK);
+        }
+
+        // Tamper directly in the store: rewrite row 2's payload. This is the
+        // threat model — someone with DB access editing history.
+        {
+            let conn = state.db.conn_for_tests();
+            conn.execute(
+                "UPDATE events SET data = '{\"cost\":99999.0,\"n\":2}' WHERE seq = 2",
+                [],
+            )
+            .unwrap();
+        }
+
+        let (status, body) = send(app, get("/api/integrity", Some("admin"))).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["intact"], false, "{body}");
+        assert_eq!(body["verdict"]["status"], "broken");
+        // First broken link is the tampered row, not a later one.
+        assert_eq!(body["verdict"]["at_seq"], 2);
+        assert_eq!(body["verdict"]["reason"], "row_modified");
+    }
+
+    #[tokio::test]
+    async fn integrity_detects_deleted_row() {
+        let state = test_state_with(config_with_chaining(), authed_admin());
+        let app = create_router(state.clone());
+
+        for n in 1..=3 {
+            let body = serde_json::json!({
+                "source": "miser",
+                "event_type": "llm_cost",
+                "data": {"cost": 0.01, "n": n}
+            })
+            .to_string();
+            let (status, _) = send(app.clone(), post_json("/api/events", "ingest", body)).await;
+            assert_eq!(status, StatusCode::OK);
+        }
+
+        // Delete a middle row: its successor's prev_hash can no longer match.
+        {
+            let conn = state.db.conn_for_tests();
+            conn.execute("DELETE FROM events WHERE seq = 2", [])
+                .unwrap();
+        }
+
+        let (status, body) = send(app, get("/api/integrity", Some("admin"))).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["intact"], false, "{body}");
+        assert_eq!(body["verdict"]["status"], "broken");
+        assert_eq!(body["verdict"]["at_seq"], 2);
+        assert_eq!(body["verdict"]["reason"], "link_mismatch");
     }
 }

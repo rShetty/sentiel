@@ -42,7 +42,8 @@ async fn main() -> anyhow::Result<()> {
 
     match cli.command {
         Commands::Init => {
-            let config = Config::default();
+            let mut config = Config::default();
+            config.database.chain_events = false;
             let toml = toml::to_string_pretty(&config)?;
             std::fs::write("config.toml", toml)?;
             println!("Created config.toml");
@@ -61,7 +62,14 @@ async fn main() -> anyhow::Result<()> {
                 anyhow::bail!(message);
             }
 
-            let db = Arc::new(Database::new(&config.database.path)?);
+            // Tamper-evident storage is opt-in: hash-chain every event row
+            // when `[database] chain_events = true` (see the audit module).
+            let db = if config.database.chain_events {
+                Database::new(&config.database.path)?.with_event_chaining()
+            } else {
+                Database::new(&config.database.path)?
+            };
+            let db = Arc::new(db);
             let metrics =
                 std::sync::Arc::new(sentiel::metrics::Metrics::new().expect("metrics registry"));
             let state = AppState {

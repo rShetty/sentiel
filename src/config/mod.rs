@@ -56,6 +56,12 @@ pub struct DatabaseConfig {
     /// Seconds between background pruning passes.
     #[serde(default = "default_prune_interval_secs")]
     pub prune_interval_secs: u64,
+    /// Tamper-evident storage: hash-chain every event row (see the `audit`
+    /// module). Off by default; enabling adds per-insert hashing cost and
+    /// makes event rows immutable-by-detection (verify via
+    /// `/api/integrity`).
+    #[serde(default)]
+    pub chain_events: bool,
 }
 
 impl Default for DatabaseConfig {
@@ -64,6 +70,7 @@ impl Default for DatabaseConfig {
             path: "sentiel.db".to_string(),
             retention_days: default_retention_days(),
             prune_interval_secs: default_prune_interval_secs(),
+            chain_events: false,
         }
     }
 }
@@ -210,5 +217,27 @@ mod tests {
         assert_eq!(severity_rank("low"), 0);
         // Unknown severities never rank above the floor.
         assert_eq!(severity_rank("bogus"), 0);
+    }
+
+    #[test]
+    fn chain_events_defaults_off_and_parses_from_toml() {
+        // Omitted -> opt-in feature stays disabled.
+        let config: Config = toml::from_str(
+            "[server]\nhost=\"127.0.0.1\"\nport=1\n\
+             [database]\npath=\"x.db\"\n\
+             [dlp]\nenabled=true\nblock_on_violation=false\n\
+             [anomaly]\nspending_spike_threshold=5.0\ndenial_rate_threshold=0.5\noff_hours_start=22\noff_hours_end=6\n",
+        )
+        .unwrap();
+        assert!(!config.database.chain_events);
+
+        let config: Config = toml::from_str(
+            "[server]\nhost=\"127.0.0.1\"\nport=1\n\
+             [database]\npath=\"x.db\"\nchain_events=true\n\
+             [dlp]\nenabled=true\nblock_on_violation=false\n\
+             [anomaly]\nspending_spike_threshold=5.0\ndenial_rate_threshold=0.5\noff_hours_start=22\noff_hours_end=6\n",
+        )
+        .unwrap();
+        assert!(config.database.chain_events);
     }
 }
