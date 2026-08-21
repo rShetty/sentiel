@@ -38,6 +38,18 @@ pub fn dashboard_html() -> String {
         .nav a:hover { background: #1e2130; color: #e94560; }
         .nav a.active { background: #e94560; color: #fff; }
         #event-stream { max-height: 500px; overflow-y: auto; }
+        .compliance { background: #1a1d29; border-radius: 8px; border: 1px solid #2a2d3a; padding: 16px; margin-bottom: 24px; }
+        .compliance h3 { font-size: 13px; color: #e94560; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 8px; }
+        .compliance select { background: #141620; color: #e0e0e0; border: 1px solid #2a2d3a; border-radius: 4px; padding: 6px 10px; margin-bottom: 12px; }
+        .disclaimer { font-size: 12px; color: #ff9800; background: #241a10; border: 1px solid #4a3517; border-radius: 4px; padding: 8px 12px; margin-bottom: 12px; }
+        .control-row { display: flex; align-items: baseline; gap: 10px; padding: 8px 0; border-top: 1px solid #22253a; flex-wrap: wrap; }
+        .control-id { color: #888; font-family: monospace; font-size: 12px; min-width: 90px; }
+        .status-chip { font-size: 11px; padding: 2px 8px; border-radius: 10px; text-transform: uppercase; letter-spacing: 0.5px; }
+        .status-monitored { background: #14301c; color: #4caf50; }
+        .status-requires_review { background: #33270f; color: #ff9800; }
+        .status-no_evidence { background: #301414; color: #f44336; }
+        .evidence-note { font-size: 11px; color: #666; width: 100%; }
+        .evidence-note code { color: #7aa2f7; }
     </style>
 </head>
 <body>
@@ -72,6 +84,18 @@ pub fn dashboard_html() -> String {
         <div class="alerts" id="alerts-section" style="display:none;">
             <h2 style="color:#f44336;margin-bottom:12px;">⚠ Active Alerts</h2>
             <div id="alerts-list"></div>
+        </div>
+
+        <div class="compliance">
+            <h3>Compliance — control mapping (evidence, not attestation)</h3>
+            <select id="framework-select">
+                <option value="soc2">SOC 2 Type II</option>
+                <option value="gdpr">GDPR</option>
+                <option value="eu_ai_act">EU AI Act</option>
+                <option value="hipaa">HIPAA</option>
+            </select>
+            <div class="disclaimer" id="compliance-disclaimer"></div>
+            <div id="controls-list"></div>
         </div>
 
         <div class="events">
@@ -147,10 +171,52 @@ pub fn dashboard_html() -> String {
                 } else {
                     document.getElementById('alerts-section').style.display = 'none';
                 }
+
+                await updateCompliance();
             } catch (err) {
                 console.error('Dashboard update failed:', err);
             }
         }
+
+        // Render the control mapping for the selected framework. The API
+        // returns { report: { framework, disclaimer, controls[] }, attachments }:
+        // the body is evidence mapping, not an attestation, and the disclaimer
+        // is rendered unconditionally so it can never be skipped.
+        async function updateCompliance() {
+            const fw = document.getElementById('framework-select').value;
+            const disclaimer = document.getElementById('compliance-disclaimer');
+            const list = document.getElementById('controls-list');
+            try {
+                const exportData = await fetchJSON(`/api/compliance/${fw}`);
+                const report = exportData.report;
+                disclaimer.textContent = report.disclaimer;
+                if (!report.controls || report.controls.length === 0) {
+                    list.innerHTML = '<div class="evidence-note">No controls mapped for this framework.</div>';
+                    return;
+                }
+                list.innerHTML = report.controls.map(c => {
+                    const status = c.status || 'no_evidence';
+                    const evidence = (c.evidence || []).map(r => {
+                        const endpoint = r.endpoint
+                            ? `<span> · endpoint <code>${r.endpoint}</code></span>`
+                            : '';
+                        return `<div class="evidence-note">↳ ${r.description}${endpoint}
+                            <code>POST /api/events/query</code></div>`;
+                    }).join('');
+                    return `<div class="control-row">
+                        <span class="control-id">${c.id}</span>
+                        <span>${c.name}</span>
+                        <span class="status-chip status-${status}">${status.replace('_', ' ')}</span>
+                        ${evidence}
+                    </div>`;
+                }).join('');
+            } catch (err) {
+                disclaimer.textContent = 'Compliance data unavailable: ' + err.message;
+                list.innerHTML = '';
+            }
+        }
+
+        document.getElementById('framework-select').addEventListener('change', updateCompliance);
 
         updateDashboard();
         setInterval(updateDashboard, 3000);

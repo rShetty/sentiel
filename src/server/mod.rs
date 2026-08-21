@@ -414,7 +414,10 @@ async fn compliance_report(
     State(state): State<AppState>,
     Path(framework): Path<String>,
 ) -> Result<Json<serde_json::Value>, crate::errors::SentielError> {
-    let report = match framework.as_str() {
+    // Returns a `ComplianceExport`: `report` (framework → controls with
+    // evidence references + data-completeness disclaimer) plus `attachments`
+    // holding the raw summary counts. See compliance module docs.
+    let export = match framework.as_str() {
         "soc2" => ComplianceReporter::generate_soc2(&state.db)?,
         "gdpr" => ComplianceReporter::generate_gdpr(&state.db)?,
         "eu_ai_act" => ComplianceReporter::generate_eu_ai_act(&state.db)?,
@@ -425,9 +428,8 @@ async fn compliance_report(
             ));
         }
     };
-    Ok(Json(serde_json::to_value(&report).unwrap()))
+    Ok(Json(serde_json::to_value(&export).unwrap()))
 }
-
 async fn cost_summary(
     State(state): State<AppState>,
 ) -> Result<Json<serde_json::Value>, crate::errors::SentielError> {
@@ -1061,6 +1063,29 @@ mod tests {
         let req = get("/api/compliance/soc2", Some("admin"));
         let (status, body) = send(app.clone(), req).await;
         assert_eq!(status, StatusCode::OK, "{body}");
-        assert_eq!(body["framework"], "SOC 2 Type II");
+        assert_eq!(body["report"]["framework"], "SOC 2 Type II");
+        // New schema: controls with evidence refs, disclaimer, and counts
+        // demoted to attachments.
+        let report = &body["report"];
+        assert!(!report["disclaimer"].as_str().unwrap_or_default().is_empty());
+        let controls = report["controls"].as_array().expect("controls array");
+        assert!(!controls.is_empty());
+        for control in controls {
+            assert!(!control["id"].as_str().unwrap_or_default().is_empty());
+            assert!(!control["name"].as_str().unwrap_or_default().is_empty());
+            assert!(
+                !control["status"].as_str().unwrap_or_default().is_empty(),
+                "control status missing: {control}"
+            );
+            let evidence = control["evidence"].as_array().expect("evidence array");
+            assert!(!evidence.is_empty(), "control without evidence: {control}");
+            for r in evidence {
+                assert!(r["query"].is_object(), "evidence query missing: {r}");
+            }
+        }
+        assert!(report.get("summary").is_none(), "counts in body: {report}");
+        let attachments = body["attachments"].as_array().expect("attachments");
+        assert_eq!(attachments[0]["name"], "summary_counts");
+        assert_eq!(attachments[0]["counts"]["authz_decisions"], 1);
     }
 }
