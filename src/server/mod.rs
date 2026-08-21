@@ -36,6 +36,21 @@ pub struct AppState {
 /// Public surface (no authentication): `/`, `/health`, static assets.
 /// Everything under `/api/*` requires a bearer token; see [`crate::auth`].
 pub fn create_router(state: AppState) -> Router {
+    // CORS: explicit allowlist only. Empty list = no browser cross-origin
+    // access (server-to-server callers are unaffected).
+    let cors = if state.config.server.cors_allowed_origins.is_empty() {
+        tower_http::cors::CorsLayer::new()
+    } else {
+        let origins: Vec<axum::http::HeaderValue> = state
+            .config
+            .server
+            .cors_allowed_origins
+            .iter()
+            .filter_map(|o| o.parse().ok())
+            .collect();
+        tower_http::cors::CorsLayer::new().allow_origin(origins)
+    };
+
     Router::new()
         .route("/", get(dashboard))
         .route("/health", get(health))
@@ -56,6 +71,7 @@ pub fn create_router(state: AppState) -> Router {
             auth_middleware,
         ))
         .layer(TraceLayer::new_for_http())
+        .layer(cors)
         .with_state(state)
 }
 

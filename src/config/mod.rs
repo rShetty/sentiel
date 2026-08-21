@@ -12,13 +12,17 @@ pub struct Config {
 pub struct ServerConfig {
     pub host: String,
     pub port: u16,
+    /// Allowed CORS origins. Empty = no cross-origin browser access.
+    #[serde(default)]
+    pub cors_allowed_origins: Vec<String>,
 }
 
 impl Default for ServerConfig {
     fn default() -> Self {
         ServerConfig {
-            host: "0.0.0.0".to_string(),
+            host: "127.0.0.1".to_string(),
             port: 8585,
+            cors_allowed_origins: vec![],
         }
     }
 }
