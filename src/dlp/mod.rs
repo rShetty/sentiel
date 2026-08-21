@@ -122,6 +122,22 @@ impl DlpEngine {
         violations
     }
 
+    /// Scan optional string fields (e.g. `session_id`, `agent_id`,
+    /// `principal_id`) and label any violations with the field name. These
+    /// fields are persisted and echoed back verbatim, so they must be inside
+    /// the DLP perimeter, not just `data`.
+    pub fn inspect_fields<'a>(&self, fields: &[(&'a str, Option<&'a str>)]) -> Vec<DlpViolation> {
+        let mut violations = Vec::new();
+        for (field, value) in fields {
+            let Some(value) = value else { continue };
+            for mut v in self.inspect(value) {
+                v.field = field.to_string();
+                violations.push(v);
+            }
+        }
+        violations
+    }
+
     pub fn inspect_json(&self, data: &serde_json::Value) -> Vec<DlpViolation> {
         if !self.enabled {
             return Vec::new();
@@ -257,6 +273,19 @@ mod tests {
             "should find ssn: {:?}",
             violations
         );
+    }
+
+    #[test]
+    fn test_inspect_fields_labels_violations_with_field_name() {
+        let engine = DlpEngine::new(true);
+        let violations = engine.inspect_fields(&[
+            ("session_id", Some("session AKIAIOSFODNN7EXAMPLE leak")),
+            ("agent_id", None),
+            ("principal_id", Some("clean-user")),
+        ]);
+        assert_eq!(violations.len(), 1);
+        assert_eq!(violations[0].pattern_name, "aws_key");
+        assert_eq!(violations[0].field, "session_id");
     }
 
     #[test]

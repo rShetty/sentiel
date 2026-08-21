@@ -51,9 +51,12 @@ async fn main() -> anyhow::Result<()> {
             let config = Config::load(&config).unwrap_or_default();
 
             // Startup guard: release builds refuse to run without API tokens
-            // unless SENTIEL_INSECURE_DEV=1 was set explicitly.
+            // unless SENTIEL_INSECURE_DEV=1 was set explicitly; insecure mode
+            // is additionally restricted to loopback bind addresses.
             let auth = AuthConfig::from_env();
-            if let Err(message) = auth.ensure_startable(cfg!(not(debug_assertions))) {
+            if let Err(message) =
+                auth.ensure_startable(cfg!(not(debug_assertions)), &config.server.host)
+            {
                 eprintln!("sentiel: {message}");
                 anyhow::bail!(message);
             }

@@ -128,6 +128,16 @@ pub fn dashboard_html() -> String {
             return d.toLocaleTimeString();
         }
 
+        // HTML-escape untrusted strings before any innerHTML interpolation.
+        // Event fields, alert messages, and compliance text all originate
+        // from ingest payloads and must never reach the DOM raw.
+        function esc(value) {
+            if (value === null || value === undefined) return '';
+            return String(value).replace(/[&<>"']/g, ch => ({
+                '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+            }[ch]));
+        }
+
         function severityClass(s) {
             return s || 'low';
         }
@@ -149,12 +159,12 @@ pub fn dashboard_html() -> String {
                 tbody.innerHTML = events.map(e => `
                     <tr>
                         <td>${formatTime(e.timestamp)}</td>
-                        <td>${e.source}</td>
-                        <td>${e.event_type}</td>
-                        <td class="${severityClass(e.severity)}">${e.severity}</td>
-                        <td>${(e.agent_id||'—').substring(0,12)}</td>
-                        <td>${(e.session_id||'—').substring(0,12)}</td>
-                        <td>${JSON.stringify(e.data).substring(0,80)}</td>
+                        <td>${esc(e.source)}</td>
+                        <td>${esc(e.event_type)}</td>
+                        <td class="${esc(severityClass(e.severity))}">${esc(e.severity)}</td>
+                        <td>${esc((e.agent_id||'—').substring(0,12))}</td>
+                        <td>${esc((e.session_id||'—').substring(0,12))}</td>
+                        <td>${esc(JSON.stringify(e.data).substring(0,80))}</td>
                     </tr>
                 `).join('');
 
@@ -163,8 +173,8 @@ pub fn dashboard_html() -> String {
                     document.getElementById('alerts-section').style.display = 'block';
                     document.getElementById('alerts-list').innerHTML = alerts.map(a => `
                         <div class="alert-item">
-                            <span class="alert-type">${a.alert_type}</span>:
-                            ${a.message}
+                            <span class="alert-type">${esc(a.alert_type)}</span>:
+                            ${esc(a.message)}
                             <span style="color:#666;font-size:12px;"> — ${formatTime(a.created_at)}</span>
                         </div>
                     `).join('');
@@ -189,8 +199,7 @@ pub fn dashboard_html() -> String {
             try {
                 const exportData = await fetchJSON(`/api/compliance/${fw}`);
                 const report = exportData.report;
-                disclaimer.textContent = report.disclaimer;
-                if (!report.controls || report.controls.length === 0) {
+                disclaimer.textContent = report.disclaimer;                if (!report.controls || report.controls.length === 0) {
                     list.innerHTML = '<div class="evidence-note">No controls mapped for this framework.</div>';
                     return;
                 }
@@ -198,15 +207,15 @@ pub fn dashboard_html() -> String {
                     const status = c.status || 'no_evidence';
                     const evidence = (c.evidence || []).map(r => {
                         const endpoint = r.endpoint
-                            ? `<span> · endpoint <code>${r.endpoint}</code></span>`
+                            ? `<span> · endpoint <code>${esc(r.endpoint)}</code></span>`
                             : '';
-                        return `<div class="evidence-note">↳ ${r.description}${endpoint}
+                        return `<div class="evidence-note">↳ ${esc(r.description)}${endpoint}
                             <code>POST /api/events/query</code></div>`;
                     }).join('');
                     return `<div class="control-row">
-                        <span class="control-id">${c.id}</span>
-                        <span>${c.name}</span>
-                        <span class="status-chip status-${status}">${status.replace('_', ' ')}</span>
+                        <span class="control-id">${esc(c.id)}</span>
+                        <span>${esc(c.name)}</span>
+                        <span class="status-chip status-${esc(status)}">${esc(status.replace('_', ' '))}</span>
                         ${evidence}
                     </div>`;
                 }).join('');
@@ -223,4 +232,57 @@ pub fn dashboard_html() -> String {
     </script>
 </body>
 </html>"#.to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Issue #10 (XSS regression): every field the dashboard interpolates
+    /// from API responses must pass through `esc()`. Event fields, alert
+    /// text, and compliance strings all originate from ingest payloads, so a
+    /// raw `${e.field}` in any template is a stored-XSS sink.
+    #[test]
+    fn html_escaping_helper_is_defined() {
+        let html = dashboard_html();
+        assert!(
+            html.contains("function esc(value)"),
+            "dashboard must define an escaping helper"
+        );
+        for entity in ["&amp;", "&lt;", "&gt;", "&quot;", "&#39;"] {
+            assert!(html.contains(entity), "esc must map {entity}");
+        }
+    }
+
+    #[test]
+    fn untrusted_fields_are_never_interpolated_raw() {
+        let html = dashboard_html();
+
+        // Every previously-vulnerable interpolation must now be escaped.
+        // A raw occurrence of these patterns means attacker-controlled text
+        // reaches innerHTML directly.
+        for raw in [
+            "${e.source}",
+            "${e.event_type}",
+            "${e.severity}",
+            "${e.agent_id",
+            "${e.session_id}",
+            "${JSON.stringify(e.data)",
+            "${a.alert_type}",
+            "${a.message}",
+            "${c.id}",
+            "${c.name}",
+            "${r.description}",
+        ] {
+            assert!(
+                !html.contains(raw),
+                "unescaped interpolation {raw} found in dashboard template"
+            );
+        }
+
+        // And their escaped counterparts must be present.
+        for escaped in ["${esc(e.source)}", "${esc(a.message)}", "${esc(c.name)}"] {
+            assert!(html.contains(escaped), "missing escaped usage: {escaped}");
+        }
+    }
 }

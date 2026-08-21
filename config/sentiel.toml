@@ -13,7 +13,11 @@ prune_interval_secs = 3600
 
 [dlp]
 enabled = true
+# Reject (HTTP 403) events whose worst DLP violation is at or above
+# `block_severity`. Set to false to record violations but store the event.
 block_on_violation = true
+block_severity = "critical"
+# Cap on DLP violations recorded per event.
 max_redactions = 100
 
 [anomaly]

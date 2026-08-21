@@ -71,8 +71,26 @@ impl Default for DatabaseConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DlpConfig {
     pub enabled: bool,
+    /// When true, ingest rejects (`422`) any event whose DLP violations meet
+    /// or exceed the block severity instead of storing it. When false,
+    /// violations are recorded on the event but the payload is stored as-is.
     pub block_on_violation: bool,
+    /// Lowest violation severity that triggers blocking when
+    /// `block_on_violation` is enabled. One of `low`, `medium`, `high`,
+    /// `critical` (default: `critical`).
+    #[serde(default = "default_block_severity")]
+    pub block_severity: String,
+    /// Cap on violations recorded per event (guards unbounded growth).
+    #[serde(default = "default_max_redactions")]
     pub max_redactions: usize,
+}
+
+fn default_block_severity() -> String {
+    "critical".to_string()
+}
+
+fn default_max_redactions() -> usize {
+    100
 }
 
 impl Default for DlpConfig {
@@ -80,8 +98,21 @@ impl Default for DlpConfig {
         DlpConfig {
             enabled: true,
             block_on_violation: true,
-            max_redactions: 100,
+            block_severity: default_block_severity(),
+            max_redactions: default_max_redactions(),
         }
+    }
+}
+
+/// Rank a DLP severity so block decisions can use `>=` comparisons.
+/// Unknown severities rank below `low` (never block on their own).
+pub fn severity_rank(severity: &str) -> u8 {
+    match severity {
+        "critical" => 3,
+        "high" => 2,
+        "medium" => 1,
+        "low" => 0,
+        _ => 0,
     }
 }
 
@@ -138,5 +169,46 @@ mod tests {
     #[test]
     fn server_payload_limit_default_is_256kib() {
         assert_eq!(ServerConfig::default().max_payload_bytes, 256 * 1024);
+    }
+
+    #[test]
+    fn dlp_config_defaults_block_critical() {
+        let dlp = DlpConfig::default();
+        assert!(dlp.block_on_violation);
+        assert_eq!(dlp.block_severity, "critical");
+        assert_eq!(dlp.max_redactions, 100);
+    }
+
+    #[test]
+    fn dlp_config_parses_block_fields_from_toml() {
+        let config: Config = toml::from_str(
+            "[server]\nhost=\"127.0.0.1\"\nport=1\n\
+             [database]\npath=\"x.db\"\n\
+             [dlp]\nenabled=true\nblock_on_violation=true\nblock_severity=\"high\"\nmax_redactions=7\n\
+             [anomaly]\nspending_spike_threshold=5.0\ndenial_rate_threshold=0.5\noff_hours_start=22\noff_hours_end=6\n",
+        )
+        .unwrap();
+        assert_eq!(config.dlp.block_severity, "high");
+        assert_eq!(config.dlp.max_redactions, 7);
+        // Omitted block fields fall back to safe defaults.
+        let minimal: Config = toml::from_str(
+            "[server]\nhost=\"127.0.0.1\"\nport=1\n\
+             [database]\npath=\"x.db\"\n\
+             [dlp]\nenabled=true\nblock_on_violation=false\n\
+             [anomaly]\nspending_spike_threshold=5.0\ndenial_rate_threshold=0.5\noff_hours_start=22\noff_hours_end=6\n",
+        )
+        .unwrap();
+        assert_eq!(minimal.dlp.block_severity, "critical");
+        assert_eq!(minimal.dlp.max_redactions, 100);
+    }
+
+    #[test]
+    fn severity_rank_orders_known_levels() {
+        assert!(severity_rank("critical") > severity_rank("high"));
+        assert!(severity_rank("high") > severity_rank("medium"));
+        assert!(severity_rank("medium") > severity_rank("low"));
+        assert_eq!(severity_rank("low"), 0);
+        // Unknown severities never rank above the floor.
+        assert_eq!(severity_rank("bogus"), 0);
     }
 }

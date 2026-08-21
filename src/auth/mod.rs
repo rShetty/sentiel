@@ -67,13 +67,24 @@ impl AuthConfig {
 
     /// Startup guard: refuse token-less starts in release builds unless the
     /// operator explicitly opted out with `SENTIEL_INSECURE_DEV=1`.
-    pub fn ensure_startable(&self, release_build: bool) -> Result<(), String> {
+    ///
+    /// `host` is the configured bind address. An unauthenticated instance is
+    /// only ever acceptable on loopback, so the insecure-dev opt-out is
+    /// refused when binding to any non-loopback interface — otherwise the
+    /// documented "never expose beyond loopback" caveat is unenforceable.
+    pub fn ensure_startable(&self, release_build: bool, host: &str) -> Result<(), String> {
         if self.admin_token.is_some() || self.ingest_token.is_some() {
             return Ok(());
         }
         if self.insecure_dev {
+            if !is_loopback_host(host) {
+                return Err(format!(
+                    "refusing to start: SENTIEL_INSECURE_DEV=1 disables authentication, \
+                     which is only safe on loopback; host {host:?} is not a loopback address"
+                ));
+            }
             tracing::warn!(
-                "SENTIEL_INSECURE_DEV=1: starting WITHOUT authentication; never expose this instance beyond loopback"
+                "SENTIEL_INSECURE_DEV=1: starting WITHOUT authentication on loopback {host}"
             );
             return Ok(());
         }
@@ -107,6 +118,21 @@ impl AuthConfig {
             return Some(Role::Ingest);
         }
         None
+    }
+}
+
+/// Whether a configured bind host only exposes the instance to this machine.
+///
+/// Accepts loopback IPs and hostnames; anything else (wildcard `0.0.0.0`,
+/// `::`, `[::]`, specific external addresses, resolvable names) is treated as
+/// non-loopback.
+fn is_loopback_host(host: &str) -> bool {
+    let host = host.trim().trim_start_matches('[').trim_end_matches(']');
+    match host.parse::<std::net::IpAddr>() {
+        // `is_loopback()` covers 127.0.0.0/8 and ::1.
+        Ok(ip) => ip.is_loopback(),
+        // Hostnames: only explicit loopback names count as safe.
+        Err(_) => matches!(host.to_ascii_lowercase().as_str(), "localhost"),
     }
 }
 
@@ -167,9 +193,9 @@ mod tests {
     #[test]
     fn start_guard_refuses_release_without_tokens() {
         let config = AuthConfig::default();
-        assert!(config.ensure_startable(true).is_err());
+        assert!(config.ensure_startable(true, "127.0.0.1").is_err());
         // Debug builds are tolerated with a warning so local development works.
-        assert!(config.ensure_startable(false).is_ok());
+        assert!(config.ensure_startable(false, "127.0.0.1").is_ok());
     }
 
     #[test]
@@ -178,12 +204,41 @@ mod tests {
             admin_token: Some("t".to_string()),
             ..AuthConfig::default()
         };
-        assert!(with_token.ensure_startable(true).is_ok());
+        // Tokens make any bind address safe.
+        assert!(with_token.ensure_startable(true, "0.0.0.0").is_ok());
 
         let opted_out = AuthConfig {
             insecure_dev: true,
             ..AuthConfig::default()
         };
-        assert!(opted_out.ensure_startable(true).is_ok());
+        assert!(opted_out.ensure_startable(true, "127.0.0.1").is_ok());
+        assert!(opted_out.ensure_startable(true, "localhost").is_ok());
+    }
+
+    #[test]
+    fn insecure_dev_on_non_loopback_host_is_refused() {
+        let opted_out = AuthConfig {
+            insecure_dev: true,
+            ..AuthConfig::default()
+        };
+        for host in ["0.0.0.0", "::", "[::]", "192.168.1.10", "example.com"] {
+            let err = opted_out
+                .ensure_startable(true, host)
+                .expect_err("must refuse unauthenticated non-loopback start");
+            assert!(err.contains(host), "error should name the host: {err}");
+        }
+    }
+
+    #[test]
+    fn loopback_detection_covers_ipv4_ipv6_and_names() {
+        assert!(is_loopback_host("127.0.0.1"));
+        assert!(is_loopback_host("127.9.9.9"));
+        assert!(is_loopback_host("::1"));
+        assert!(is_loopback_host("[::1]"));
+        assert!(is_loopback_host(" localhost "));
+        assert!(!is_loopback_host("0.0.0.0"));
+        assert!(!is_loopback_host(""));
+        assert!(!is_loopback_host("8.8.8.8"));
+        assert!(!is_loopback_host("example.internal"));
     }
 }
