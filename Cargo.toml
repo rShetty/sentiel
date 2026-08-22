@@ -23,7 +23,7 @@ anyhow = "1"
 regex = "1"
 parking_lot = "0.12"
 toml = "0.8"
-prometheus = { version = "0.13", features = ["process"] }
+prometheus = { version = "0.14", features = ["process"] }
 sha2 = "0.10"
 
 [dev-dependencies]
