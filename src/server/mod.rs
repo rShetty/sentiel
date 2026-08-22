@@ -253,6 +253,7 @@ async fn ingest_event(
     State(state): State<AppState>,
     payload: Result<Json<crate::events::CreateEvent>, axum::extract::rejection::JsonRejection>,
 ) -> Result<Json<serde_json::Value>, crate::errors::SentielError> {
+    let _ingest_timer = state.metrics.ingest_latency.start_timer();
     // Malformed JSON (400) and missing/mistyped fields (422) are surfaced as
     // JSON errors instead of axum's default plain-text rejections.
     let Json(req) = payload.map_err(|rejection| crate::errors::SentielError::InvalidRequest {
@@ -760,6 +761,24 @@ mod tests {
             let (status, _) = send(app.clone(), get(path, Some("admin"))).await;
             assert_eq!(status, StatusCode::OK, "path: {path}");
         }
+    }
+
+    #[tokio::test]
+    async fn rejected_origin_gets_no_cors_headers() {
+        // Issue #2: non-allowlisted origins must not receive CORS grants.
+        let app = create_router(test_state(AuthConfig::default()));
+        let req = Request::builder()
+            .method(axum::http::Method::GET)
+            .uri("/health")
+            .header(header::ORIGIN, "https://evil.example")
+            .body(Body::empty())
+            .unwrap();
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        assert!(
+            resp.headers().get(header::ACCESS_CONTROL_ALLOW_ORIGIN).is_none(),
+            "disallowed origin must not receive access-control-allow-origin"
+        );
     }
 
     #[tokio::test]

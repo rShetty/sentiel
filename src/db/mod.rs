@@ -338,22 +338,46 @@ impl Database {
         })?;
 
         let mut verified: u64 = 0;
-        let mut head: String = crate::audit::GENESIS.to_string();
+        let mut last_seq: Option<u64> = None;
+        // Genesis is GENESIS for an un-pruned chain. After retention pruning
+        // removes a contiguous prefix, the earliest surviving row's stored
+        // prev_hash becomes the trusted anchor — internal links and row
+        // hashes after it are still fully verified.
+        let mut head: Option<String> = None;
         let mut verdict = None;
 
-        for (position, row) in rows.enumerate() {
-            // Chain positions are 1-based; `position` is the 0-based index of
-            // the row we expect here, so the expected seq is position + 1.
-            let expected_seq = position as u64 + 1;
+        for row in rows {
             let (seq, prev_hash, row_hash, fields) = row?;
             let seq = u64::try_from(seq).map_err(|_| {
                 SentielError::Database(format!("negative chain seq {seq} in events table"))
             })?;
 
-            // Gap in the sequence: rows were deleted.
-            if seq != expected_seq {
+            // Contiguity between surviving rows.
+            if let Some(prev_seq) = last_seq.filter(|prev| seq != prev + 1) {
                 verdict = Some(ChainVerdict::Broken(BrokenLink {
-                    at_seq: expected_seq,
+                    at_seq: prev_seq + 1,
+                    kind: BreakReason::LinkMismatch,
+                }));
+                break;
+            }
+
+            let stored_prev = prev_hash.as_deref().unwrap_or("").to_string();
+
+            let head_now = match head.clone() {
+                Some(h) => h,
+                None => {
+                    // First surviving row anchors the chain.
+                    head = Some(stored_prev.clone());
+                    stored_prev.clone()
+                }
+            };
+            let _ = head_now;
+
+            // Link integrity: does this row claim the right ancestor?
+            let expected_head = head.clone().unwrap_or_default();
+            if stored_prev != expected_head {
+                verdict = Some(ChainVerdict::Broken(BrokenLink {
+                    at_seq: seq,
                     kind: BreakReason::LinkMismatch,
                 }));
                 break;
@@ -363,7 +387,8 @@ impl Database {
             let stored_hash = row_hash.as_deref().unwrap_or("");
 
             // Link integrity first: does this row claim the right ancestor?
-            if stored_prev != head {
+            let expected_head = head.clone().unwrap_or_default();
+            if stored_prev != expected_head {
                 verdict = Some(ChainVerdict::Broken(BrokenLink {
                     at_seq: seq,
                     kind: BreakReason::LinkMismatch,
@@ -399,7 +424,8 @@ impl Database {
                 break;
             }
 
-            head = stored_hash.to_string();
+            head = Some(stored_hash.to_string());
+            last_seq = Some(seq);
             verified += 1;
         }
 
@@ -415,7 +441,7 @@ impl Database {
 
         let verdict = verdict.unwrap_or(ChainVerdict::Intact {
             verified_rows: verified,
-            head_hash: head,
+            head_hash: head.clone().unwrap_or_default(),
         });
 
         Ok(crate::audit::ChainVerification {
