@@ -90,6 +90,13 @@ jobs:
             if [ ! -f /etc/sentiel/sentiel.env ]; then
               echo "RUST_LOG=info" > /etc/sentiel/sentiel.env
             fi
+            # Provision API tokens once (release builds refuse to start without them)
+            if ! grep -q "^SENTIEL_ADMIN_TOKEN=" /etc/sentiel/sentiel.env; then
+              echo "SENTIEL_ADMIN_TOKEN=$(openssl rand -hex 32)" >> /etc/sentiel/sentiel.env
+            fi
+            if ! grep -q "^SENTIEL_INGEST_TOKEN=" /etc/sentiel/sentiel.env; then
+              echo "SENTIEL_INGEST_TOKEN=$(openssl rand -hex 32)" >> /etc/sentiel/sentiel.env
+            fi
             chmod 600 /etc/sentiel/sentiel.env
 
             # Copy config
