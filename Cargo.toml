@@ -8,7 +8,7 @@ description = "Observability, DLP, and compliance for AI agent ecosystems"
 [dependencies]
 tokio = { version = "1", features = ["full"] }
 axum = "0.8"
-tower = "0.5"
+tower = { version = "0.5", features = ["util"] }
 tower-http = { version = "0.6", features = ["trace", "cors"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
@@ -23,6 +23,8 @@ anyhow = "1"
 regex = "1"
 parking_lot = "0.12"
 toml = "0.8"
+prometheus = { version = "0.13", features = ["process"] }
+sha2 = "0.10"
 
 [dev-dependencies]
 reqwest = { version = "0.12", features = ["json"] }

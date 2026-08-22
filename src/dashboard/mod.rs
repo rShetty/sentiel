@@ -38,6 +38,18 @@ pub fn dashboard_html() -> String {
         .nav a:hover { background: #1e2130; color: #e94560; }
         .nav a.active { background: #e94560; color: #fff; }
         #event-stream { max-height: 500px; overflow-y: auto; }
+        .compliance { background: #1a1d29; border-radius: 8px; border: 1px solid #2a2d3a; padding: 16px; margin-bottom: 24px; }
+        .compliance h3 { font-size: 13px; color: #e94560; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 8px; }
+        .compliance select { background: #141620; color: #e0e0e0; border: 1px solid #2a2d3a; border-radius: 4px; padding: 6px 10px; margin-bottom: 12px; }
+        .disclaimer { font-size: 12px; color: #ff9800; background: #241a10; border: 1px solid #4a3517; border-radius: 4px; padding: 8px 12px; margin-bottom: 12px; }
+        .control-row { display: flex; align-items: baseline; gap: 10px; padding: 8px 0; border-top: 1px solid #22253a; flex-wrap: wrap; }
+        .control-id { color: #888; font-family: monospace; font-size: 12px; min-width: 90px; }
+        .status-chip { font-size: 11px; padding: 2px 8px; border-radius: 10px; text-transform: uppercase; letter-spacing: 0.5px; }
+        .status-monitored { background: #14301c; color: #4caf50; }
+        .status-requires_review { background: #33270f; color: #ff9800; }
+        .status-no_evidence { background: #301414; color: #f44336; }
+        .evidence-note { font-size: 11px; color: #666; width: 100%; }
+        .evidence-note code { color: #7aa2f7; }
     </style>
 </head>
 <body>
@@ -74,6 +86,18 @@ pub fn dashboard_html() -> String {
             <div id="alerts-list"></div>
         </div>
 
+        <div class="compliance">
+            <h3>Compliance — control mapping (evidence, not attestation)</h3>
+            <select id="framework-select">
+                <option value="soc2">SOC 2 Type II</option>
+                <option value="gdpr">GDPR</option>
+                <option value="eu_ai_act">EU AI Act</option>
+                <option value="hipaa">HIPAA</option>
+            </select>
+            <div class="disclaimer" id="compliance-disclaimer"></div>
+            <div id="controls-list"></div>
+        </div>
+
         <div class="events">
             <table>
                 <thead>
@@ -104,6 +128,16 @@ pub fn dashboard_html() -> String {
             return d.toLocaleTimeString();
         }
 
+        // HTML-escape untrusted strings before any innerHTML interpolation.
+        // Event fields, alert messages, and compliance text all originate
+        // from ingest payloads and must never reach the DOM raw.
+        function esc(value) {
+            if (value === null || value === undefined) return '';
+            return String(value).replace(/[&<>"']/g, ch => ({
+                '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+            }[ch]));
+        }
+
         function severityClass(s) {
             return s || 'low';
         }
@@ -125,12 +159,12 @@ pub fn dashboard_html() -> String {
                 tbody.innerHTML = events.map(e => `
                     <tr>
                         <td>${formatTime(e.timestamp)}</td>
-                        <td>${e.source}</td>
-                        <td>${e.event_type}</td>
-                        <td class="${severityClass(e.severity)}">${e.severity}</td>
-                        <td>${(e.agent_id||'—').substring(0,12)}</td>
-                        <td>${(e.session_id||'—').substring(0,12)}</td>
-                        <td>${JSON.stringify(e.data).substring(0,80)}</td>
+                        <td>${esc(e.source)}</td>
+                        <td>${esc(e.event_type)}</td>
+                        <td class="${esc(severityClass(e.severity))}">${esc(e.severity)}</td>
+                        <td>${esc((e.agent_id||'—').substring(0,12))}</td>
+                        <td>${esc((e.session_id||'—').substring(0,12))}</td>
+                        <td>${esc(JSON.stringify(e.data).substring(0,80))}</td>
                     </tr>
                 `).join('');
 
@@ -139,22 +173,116 @@ pub fn dashboard_html() -> String {
                     document.getElementById('alerts-section').style.display = 'block';
                     document.getElementById('alerts-list').innerHTML = alerts.map(a => `
                         <div class="alert-item">
-                            <span class="alert-type">${a.alert_type}</span>:
-                            ${a.message}
+                            <span class="alert-type">${esc(a.alert_type)}</span>:
+                            ${esc(a.message)}
                             <span style="color:#666;font-size:12px;"> — ${formatTime(a.created_at)}</span>
                         </div>
                     `).join('');
                 } else {
                     document.getElementById('alerts-section').style.display = 'none';
                 }
+
+                await updateCompliance();
             } catch (err) {
                 console.error('Dashboard update failed:', err);
             }
         }
+
+        // Render the control mapping for the selected framework. The API
+        // returns { report: { framework, disclaimer, controls[] }, attachments }:
+        // the body is evidence mapping, not an attestation, and the disclaimer
+        // is rendered unconditionally so it can never be skipped.
+        async function updateCompliance() {
+            const fw = document.getElementById('framework-select').value;
+            const disclaimer = document.getElementById('compliance-disclaimer');
+            const list = document.getElementById('controls-list');
+            try {
+                const exportData = await fetchJSON(`/api/compliance/${fw}`);
+                const report = exportData.report;
+                disclaimer.textContent = report.disclaimer;                if (!report.controls || report.controls.length === 0) {
+                    list.innerHTML = '<div class="evidence-note">No controls mapped for this framework.</div>';
+                    return;
+                }
+                list.innerHTML = report.controls.map(c => {
+                    const status = c.status || 'no_evidence';
+                    const evidence = (c.evidence || []).map(r => {
+                        const endpoint = r.endpoint
+                            ? `<span> · endpoint <code>${esc(r.endpoint)}</code></span>`
+                            : '';
+                        return `<div class="evidence-note">↳ ${esc(r.description)}${endpoint}
+                            <code>POST /api/events/query</code></div>`;
+                    }).join('');
+                    return `<div class="control-row">
+                        <span class="control-id">${esc(c.id)}</span>
+                        <span>${esc(c.name)}</span>
+                        <span class="status-chip status-${esc(status)}">${esc(status.replace('_', ' '))}</span>
+                        ${evidence}
+                    </div>`;
+                }).join('');
+            } catch (err) {
+                disclaimer.textContent = 'Compliance data unavailable: ' + err.message;
+                list.innerHTML = '';
+            }
+        }
+
+        document.getElementById('framework-select').addEventListener('change', updateCompliance);
 
         updateDashboard();
         setInterval(updateDashboard, 3000);
     </script>
 </body>
 </html>"#.to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Issue #10 (XSS regression): every field the dashboard interpolates
+    /// from API responses must pass through `esc()`. Event fields, alert
+    /// text, and compliance strings all originate from ingest payloads, so a
+    /// raw `${e.field}` in any template is a stored-XSS sink.
+    #[test]
+    fn html_escaping_helper_is_defined() {
+        let html = dashboard_html();
+        assert!(
+            html.contains("function esc(value)"),
+            "dashboard must define an escaping helper"
+        );
+        for entity in ["&amp;", "&lt;", "&gt;", "&quot;", "&#39;"] {
+            assert!(html.contains(entity), "esc must map {entity}");
+        }
+    }
+
+    #[test]
+    fn untrusted_fields_are_never_interpolated_raw() {
+        let html = dashboard_html();
+
+        // Every previously-vulnerable interpolation must now be escaped.
+        // A raw occurrence of these patterns means attacker-controlled text
+        // reaches innerHTML directly.
+        for raw in [
+            "${e.source}",
+            "${e.event_type}",
+            "${e.severity}",
+            "${e.agent_id",
+            "${e.session_id}",
+            "${JSON.stringify(e.data)",
+            "${a.alert_type}",
+            "${a.message}",
+            "${c.id}",
+            "${c.name}",
+            "${r.description}",
+        ] {
+            assert!(
+                !html.contains(raw),
+                "unescaped interpolation {raw} found in dashboard template"
+            );
+        }
+
+        // And their escaped counterparts must be present.
+        for escaped in ["${esc(e.source)}", "${esc(a.message)}", "${esc(c.name)}"] {
+            assert!(html.contains(escaped), "missing escaped usage: {escaped}");
+        }
+    }
 }
