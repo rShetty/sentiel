@@ -128,7 +128,7 @@ curl -X POST http://localhost:8585/api/events \
 
 ## Ecosystem
 
-Sentiel is part of a six-project AI governance ecosystem for enterprises:
+Sentiel is part of the AI governance ecosystem governed through Governance Hub:
 
 | Project | Role | Repo |
 |---|---|---|
@@ -138,6 +138,9 @@ Sentiel is part of a six-project AI governance ecosystem for enterprises:
 | **Miser** | LLM cost optimization | [rShetty/miser](https://github.com/rShetty/miser) |
 | **Sentiel** | Observability, DLP & compliance | [rShetty/sentiel](https://github.com/rShetty/sentiel) |
 | **Aegis** | Network egress & attestation | [rShetty/Aegis](https://github.com/rShetty/Aegis) |
+| **Argus** | Human/agent OIDC identity provider | [rShetty/argus](https://github.com/rShetty/argus) |
+| **Forge** | Supply chain trust & package signing | [rShetty/forge](https://github.com/rShetty/forge) |
+| **Governance Hub** | Unified admin console and sole product UI | [rShetty/governance-hub](https://github.com/rShetty/governance-hub) |
 
 Sentiel receives telemetry from all other components (correlated by `session_id`),
 inspects tool call data for sensitive patterns (DLP), detects anomalies, and
